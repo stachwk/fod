@@ -977,6 +977,13 @@ Reading guide:
   FOD 3.4.484 applies the same exact one-row/one-column positive-ID check to
   source, scan-run and import-plan staging upserts. Its pure regression covers
   empty, duplicate, multicolumn, zero and malformed IDs.
+  FOD 3.4.485 hardens post-conflict namespace confirmation lookups: they now
+  reject duplicate rows and require exact result-column counts instead of
+  trusting `LIMIT 1` and the first row. Startup probes likewise require one
+  row with the exact expected shape. The focused decoder regression and all 72
+  `pg_query` tests passed against an isolated PostgreSQL 16.15 database after
+  verifying the custom build flag `--with-blocksize=32` and runtime
+  `SHOW block_size=32768`; the disposable database was dropped afterward.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

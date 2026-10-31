@@ -2874,6 +2874,29 @@ unsafe fn fetch_single_positive_id(res: *mut PGresult, description: &str) -> Res
     Ok(id)
 }
 
+fn validate_optional_single_row_texts(
+    mut rows: Vec<Vec<String>>,
+    expected_columns: usize,
+    description: &str,
+) -> Result<Option<Vec<String>>, String> {
+    if rows.len() > 1 {
+        return Err(format!(
+            "invalid PostgreSQL {description} result: expected at most 1 row, got {}",
+            rows.len()
+        ));
+    }
+    let Some(row) = rows.pop() else {
+        return Ok(None);
+    };
+    if row.len() != expected_columns {
+        return Err(format!(
+            "invalid PostgreSQL {description} result: expected {expected_columns} columns, got {}",
+            row.len()
+        ));
+    }
+    Ok(Some(row))
+}
+
 unsafe fn fetch_single_optional_text(res: *mut PGresult) -> Result<Option<String>, String> {
     let value = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
@@ -6075,17 +6098,15 @@ impl DbRepo {
             None => "id_directory IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT id_hardlink, id_file, uid, gid FROM hardlinks WHERE {parent_clause} AND name = {} LIMIT 1",
+            "SELECT id_hardlink, id_file, uid, gid FROM hardlinks WHERE {parent_clause} AND name = {} LIMIT 2",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
-        let Some(row) = rows.first() else {
+        let Some(row) = validate_optional_single_row_texts(rows, 4, "created hardlink lookup")?
+        else {
             return Ok(None);
         };
-        if row.len() < 4 {
-            return Ok(None);
-        }
-        let hardlink_id = row[0].trim().parse::<u64>().ok();
+        let hardlink_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
         let id_file = row[1].trim().parse::<u64>().ok();
         let matches = hardlink_id.is_some()
             && id_file == Some(source_file_id)
@@ -6112,17 +6133,15 @@ impl DbRepo {
             None => "id_parent IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT id_symlink, target, uid, gid, inode_seed FROM symlinks WHERE {parent_clause} AND name = {} LIMIT 1",
+            "SELECT id_symlink, target, uid, gid, inode_seed FROM symlinks WHERE {parent_clause} AND name = {} LIMIT 2",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
-        let Some(row) = rows.first() else {
+        let Some(row) = validate_optional_single_row_texts(rows, 5, "created symlink lookup")?
+        else {
             return Ok(None);
         };
-        if row.len() < 5 {
-            return Ok(None);
-        }
-        let symlink_id = row[0].trim().parse::<u64>().ok();
+        let symlink_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
         let matches = symlink_id.is_some()
             && row[1].trim() == target
             && row[2].trim() == uid.to_string()
@@ -6146,14 +6165,16 @@ impl DbRepo {
             None => "id_parent IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT id_symlink_hardlink FROM symlink_hardlinks WHERE {parent_clause} AND name = {} AND id_symlink = {symlink_id} LIMIT 1",
+            "SELECT id_symlink_hardlink FROM symlink_hardlinks WHERE {parent_clause} AND name = {} AND id_symlink = {symlink_id} LIMIT 2",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
-        let Some(row) = rows.first() else {
+        let Some(row) =
+            validate_optional_single_row_texts(rows, 1, "created symlink hardlink lookup")?
+        else {
             return Ok(None);
         };
-        Ok(row.first().and_then(|id| id.trim().parse::<u64>().ok()))
+        Ok(row[0].trim().parse::<u64>().ok().filter(|id| *id > 0))
     }
 
     fn confirm_created_directory(
@@ -6170,17 +6191,15 @@ impl DbRepo {
             None => "id_parent IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT id_directory, mode, uid, gid, inode_seed FROM directories WHERE {parent_clause} AND name = {} LIMIT 1",
+            "SELECT id_directory, mode, uid, gid, inode_seed FROM directories WHERE {parent_clause} AND name = {} LIMIT 2",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
-        let Some(row) = rows.first() else {
+        let Some(row) = validate_optional_single_row_texts(rows, 5, "created directory lookup")?
+        else {
             return Ok(None);
         };
-        if row.len() < 5 {
-            return Ok(None);
-        }
-        let directory_id = row[0].trim().parse::<u64>().ok();
+        let directory_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
         let matches = directory_id.is_some()
             && row[1].trim() == mode
             && row[2].trim() == uid.to_string()
@@ -6523,17 +6542,14 @@ impl DbRepo {
             None => "id_directory IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT id_file, size, mode, uid, gid, inode_seed FROM files WHERE {parent_clause} AND name = {} AND NOT unlinked AND NOT EXISTS (SELECT 1 FROM special_files WHERE special_files.id_file = files.id_file) LIMIT 1",
+            "SELECT id_file, size, mode, uid, gid, inode_seed FROM files WHERE {parent_clause} AND name = {} AND NOT unlinked AND NOT EXISTS (SELECT 1 FROM special_files WHERE special_files.id_file = files.id_file) LIMIT 2",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
-        let Some(row) = rows.first() else {
+        let Some(row) = validate_optional_single_row_texts(rows, 6, "created file lookup")? else {
             return Ok(None);
         };
-        if row.len() < 6 {
-            return Ok(None);
-        }
-        let file_id = row[0].trim().parse::<u64>().ok();
+        let file_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
         let matches = file_id.is_some()
             && row[1].trim() == "0"
             && row[2].trim() == mode
@@ -6565,17 +6581,15 @@ impl DbRepo {
             None => "files.id_directory IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT files.id_file, files.size, files.mode, files.uid, files.gid, files.inode_seed, special_files.file_type, special_files.rdev_major, special_files.rdev_minor FROM files JOIN special_files ON special_files.id_file = files.id_file WHERE {parent_clause} AND files.name = {} AND NOT files.unlinked LIMIT 1",
+            "SELECT files.id_file, files.size, files.mode, files.uid, files.gid, files.inode_seed, special_files.file_type, special_files.rdev_major, special_files.rdev_minor FROM files JOIN special_files ON special_files.id_file = files.id_file WHERE {parent_clause} AND files.name = {} AND NOT files.unlinked LIMIT 2",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
-        let Some(row) = rows.first() else {
+        let Some(row) = validate_optional_single_row_texts(rows, 9, "created special file lookup")?
+        else {
             return Ok(None);
         };
-        if row.len() < 9 {
-            return Ok(None);
-        }
-        let file_id = row[0].trim().parse::<u64>().ok();
+        let file_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
         let matches = file_id.is_some()
             && row[1].trim() == "0"
             && row[2].trim() == mode
@@ -15532,6 +15546,34 @@ mod tests {
     use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn optional_row_vector_validator_requires_exact_shape_and_cardinality() {
+        assert_eq!(
+            validate_optional_single_row_texts(
+                vec![vec!["a".to_string(), "b".to_string()]],
+                2,
+                "test row"
+            ),
+            Ok(Some(vec!["a".to_string(), "b".to_string()]))
+        );
+        assert_eq!(
+            validate_optional_single_row_texts(Vec::new(), 2, "test row"),
+            Ok(None)
+        );
+        assert!(validate_optional_single_row_texts(
+            vec![vec!["a".to_string()], vec!["b".to_string()]],
+            1,
+            "test row"
+        )
+        .is_err());
+        assert!(validate_optional_single_row_texts(
+            vec![vec!["a".to_string(), "extra".to_string()]],
+            1,
+            "test row"
+        )
+        .is_err());
+    }
 
     #[test]
     fn scalar_text_decoders_distinguish_absent_null_and_malformed_results() -> Result<(), String> {

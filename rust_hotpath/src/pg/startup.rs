@@ -7,7 +7,7 @@
 use super::{
     exec_params, fetch_single_optional_text, postgres_runtime_requirements_on_conn,
     postgres_version_diagnostics_on_conn, query_rows_text_on_conn, query_scalar_text_on_conn,
-    schema_is_initialized_on_conn, DbRepo, PGconn,
+    schema_is_initialized_on_conn, validate_optional_single_row_texts, DbRepo, PGconn,
 };
 use fod_rust_runtime::{
     PostgresRuntimeRequirements, PostgresVersionDiagnostics, FOD_REQUIRED_SCHEMA_VERSION,
@@ -139,15 +139,8 @@ impl DbRepo {
         ))
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let rows = query_rows_text_on_conn(conn, &sql)?;
-        let row = rows
-            .first()
+        let row = validate_optional_single_row_texts(rows, 2, "startup probe")?
             .ok_or_else(|| "startup probe returned no rows".to_string())?;
-        if row.len() < 2 {
-            return Err(format!(
-                "startup probe returned {} columns, expected at least 2",
-                row.len()
-            ));
-        }
 
         let schema_is_initialized = matches!(
             row[0].trim().to_ascii_lowercase().as_str(),
@@ -193,15 +186,8 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let rows = query_rows_text_on_conn(conn, &sql)?;
-        let row = rows
-            .first()
+        let row = validate_optional_single_row_texts(rows, 7, "initialized startup values")?
             .ok_or_else(|| "initialized startup values query returned no rows".to_string())?;
-        if row.len() < 7 {
-            return Err(format!(
-                "initialized startup values query returned {} columns, expected at least 7",
-                row.len()
-            ));
-        }
 
         let block_size_present = matches!(
             row[0].trim().to_ascii_lowercase().as_str(),

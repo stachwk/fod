@@ -919,3 +919,10 @@ FOD 3.4.484 applies the same exact single-positive-ID contract to the three
 staged index upserts that return a source, scan-run or import-plan ID. A pure
 unit regression checks empty, duplicate, multicolumn, zero and malformed
 results.
+FOD 3.4.485 makes post-conflict namespace confirmation queries reject
+duplicate rows and enforce exact column counts; the prior `LIMIT 1` behavior
+could hide duplicate bindings. Startup probes now also require exactly one
+row with the expected number of columns. The decoder regression and all 72
+`pg_query` tests passed against a disposable PostgreSQL 16.15 database after
+checking `--with-blocksize=32` and live `SHOW block_size=32768`; the database
+was dropped after the run.
