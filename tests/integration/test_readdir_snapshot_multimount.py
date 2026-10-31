@@ -70,6 +70,8 @@ def check_libc_directory_stream(path: Path, expected_entries: int) -> None:
     libc.opendir.restype = ctypes.c_void_p
     libc.readdir.argtypes = [ctypes.c_void_p]
     libc.readdir.restype = ctypes.c_void_p
+    libc.dirfd.argtypes = [ctypes.c_void_p]
+    libc.dirfd.restype = ctypes.c_int
     libc.closedir.argtypes = [ctypes.c_void_p]
     libc.closedir.restype = ctypes.c_int
 
@@ -134,6 +136,28 @@ def check_libc_directory_stream(path: Path, expected_entries: int) -> None:
             )
     finally:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft_limit, hard_limit))
+
+    # Exercise the libc failure path on a real FUSE-backed DIR stream. POSIX
+    # requires EBADF when closedir() cannot close the descriptor owned by dirp.
+    ctypes.set_errno(0)
+    failed_close_stream = libc.opendir(os.fsencode(path))
+    if not failed_close_stream:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(path))
+    failed_close_fd = libc.dirfd(failed_close_stream)
+    if failed_close_fd < 0:
+        error = ctypes.get_errno()
+        libc.closedir(failed_close_stream)
+        raise OSError(error, os.strerror(error), str(path))
+    os.close(failed_close_fd)
+    ctypes.set_errno(0)
+    if libc.closedir(failed_close_stream) != -1:
+        raise AssertionError("libc closedir succeeded after its underlying fd was closed")
+    error = ctypes.get_errno()
+    if error != errno.EBADF:
+        raise AssertionError(
+            f"libc closedir errno={error}, expected EBADF ({errno.EBADF})"
+        )
 
 
 def main() -> None:
@@ -220,7 +244,7 @@ def main() -> None:
 
     print(
         "OK: 512-entry cross-mount snapshot has stable continuation, rewind refresh, "
-        "and direct libc readdir/errno coverage"
+        "direct libc readdir/errno coverage, and closedir EBADF"
     )
 
 

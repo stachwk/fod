@@ -731,9 +731,12 @@ Reading guide:
   mounted snapshot regression now traverses 512 initial entries and checks
   direct libc `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT`
   from `opendir()` for a missing path, plus `EMFILE` after exhausting the process
-  descriptor limit. System-wide `ENFILE` and failure-path `closedir()` remain
-  unverified. Keep the remaining in-scope `ENFILE`, `closedir()` and namespace
-  errno checks on supported 64-bit-and-wider systems; do not provision or build
+  descriptor limit. The regression now asserts that `closedir()` returns
+  `EBADF` after its owned descriptor is closed externally. Its libc helper passed
+  against a local directory; the two-mount FUSE test could not run because no
+  PostgreSQL server was available. System-wide `ENFILE` and namespace errno
+  checks remain unverified on supported 64-bit-and-wider systems; do not provision
+  or build
   a 32-bit FOD target for the narrow-inode `EOVERFLOW` case.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
@@ -755,8 +758,9 @@ Reading guide:
   not require either membership outcome before rewind. The regression uses 512
   initial child entries and checks the libc stream boundary, including `EMFILE`.
   32-bit narrow-ABI `EOVERFLOW` is outside the supported architecture matrix;
-  system-wide `ENFILE` and failure-path `closedir()` behavior remain to be
-  covered on supported systems.
+  system-wide `ENFILE` remains to be covered on supported systems. The test
+  source now includes the `closedir()` `EBADF` failure path; the helper passed
+  locally, but the full mounted test still needs an available PostgreSQL server.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes

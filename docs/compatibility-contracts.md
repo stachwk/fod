@@ -5,13 +5,15 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `3e8010a` (`FOD 3.4.391`); documentation review updated
-for FOD 3.4.392. The latest mounted
+Reviewed base: commit `546aa09` (`FOD 3.4.392`); test/documentation review
+updated for FOD 3.4.393. The latest mounted
 `statvfs()` signal-interruption regression cited below passed on FOD 3.4.387;
 3.4.391 fixes `st_nlink` saturation at the FUSE ABI limit; its conversion
 boundary has a unit test but no mounted test with an unrepresentably large link
 count. The 3.4.392 review classifies native `stat()` overflow for the audited
-x86_64 ABI; it adds no mounted test or new POSIX pass.
+x86_64 ABI. FOD 3.4.393 adds a `closedir()` `EBADF` assertion; its helper
+passed on a local directory, while the two-mount test could not run without
+PostgreSQL. No new POSIX area is marked Pass.
 
 ## Overall filesystem compatibility status
 

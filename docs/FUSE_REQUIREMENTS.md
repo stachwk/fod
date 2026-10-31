@@ -1,9 +1,9 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu FOD 3.4.391 (`3e8010a`), dokumentacja
-zaktualizowana dla FOD 3.4.392. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu FOD 3.4.392 (`546aa09`), dokumentacja
+zaktualizowana dla FOD 3.4.393. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.391.
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.393.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
