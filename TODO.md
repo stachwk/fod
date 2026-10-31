@@ -2569,3 +2569,10 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   acquisition as positive IDs. Generic unsigned parsing previously accepted
   zero and could pass it into later heartbeat/write-fence operations.
   Formatting and hotpath compilation pass; no database operation was run.
+
+## FOD 3.4.509 — reject invalid caller-provided write fences
+
+- [x] Validate public lease and persistence-fence inputs before issuing
+  heartbeat, release or persistence queries. A caller-constructed lease or
+  fence with token zero could otherwise be reported as merely stale. Formatting
+  and hotpath compilation pass; no database operation was run.

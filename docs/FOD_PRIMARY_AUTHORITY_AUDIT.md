@@ -1058,3 +1058,7 @@ closed.
 FOD 3.4.508 also rejects non-positive destination and file fencing tokens at
 write-lease acquisition, before those tokens can enter later heartbeat or
 persistence checks.
+
+FOD 3.4.509 rejects zero fencing tokens in caller-provided leases and
+persistence fences at the API boundary, including heartbeat and release paths,
+before using them in PostgreSQL predicates.

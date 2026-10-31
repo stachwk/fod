@@ -5221,6 +5221,13 @@ pub struct WritePersistenceFence {
     pub file_fencing_token: u64,
 }
 
+fn validate_write_ownership_lease_tokens(lease: WriteOwnershipLease) -> Result<(), String> {
+    if lease.destination_fencing_token == 0 || lease.file_fencing_token == Some(0) {
+        return Err("write ownership lease contains a non-positive fencing token".to_string());
+    }
+    Ok(())
+}
+
 impl DbRepo {
     /// Use the main authority pool for mutation preconditions instead of the
     /// optional replica read pool. The configured authority itself is unchanged.
@@ -9282,6 +9289,7 @@ impl DbRepo {
         if file_id.is_some() != lease.file_fencing_token.is_some() {
             return Err("write ownership file id/token presence mismatch".to_string());
         }
+        validate_write_ownership_lease_tokens(lease)?;
 
         let session_id_value = self.current_lock_session_id()?;
         if session_id_value <= 0 {
@@ -9474,6 +9482,9 @@ impl DbRepo {
         if lease_ttl_seconds == 0 {
             return Err("write ownership lease ttl must be greater than zero".to_string());
         }
+        if file_fencing_token == 0 {
+            return Err("write ownership fencing token must be positive".to_string());
+        }
 
         let session_id_value = self.current_lock_session_id()?;
         if session_id_value <= 0 {
@@ -9545,6 +9556,7 @@ impl DbRepo {
         owner_key: u64,
         lease: WriteOwnershipLease,
     ) -> Result<(), String> {
+        validate_write_ownership_lease_tokens(lease)?;
         let session_id_value = self.current_lock_session_id()?;
         if session_id_value <= 0 {
             return Ok(());
@@ -14481,6 +14493,16 @@ impl DbRepo {
         file_id: u64,
         fence: WritePersistenceFence,
     ) -> Result<(), String> {
+        if fence.session_id == 0 || fence.file_fencing_token == 0 {
+            return Err(format!(
+                "{} file_id={} session_id={} owner_key={} token={} invalid_non_positive_fence",
+                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+                file_id,
+                fence.session_id,
+                fence.owner_key,
+                fence.file_fencing_token
+            ));
+        }
         let resource_key = CString::new(format!("fod:write:file:{file_id}"))
             .map_err(|_| "write fence advisory resource contains NUL byte".to_string())?;
         // Concurrent persistence callbacks for the same open handle (for
