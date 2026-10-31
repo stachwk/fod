@@ -4,6 +4,14 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+FOD 3.4.514 updates shared data-object reference counts during failed-import
+cleanup by atomically subtracting the number of deleted file references. The
+conditional update rejects underflow, and exclusive-object deletion checks
+that the reference count has not changed since the cleanup decision. This
+prevents a concurrent increment from being overwritten by a stale absolute
+count. Deterministic concurrent database validation remains pending; see
+TX-03D in [`FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md).
+
 FOD 3.4.513 makes failed-import cleanup refuse deletion when an imported file
 has a hardlink alias outside the import subtree. Deleting the backing
 `files` row cascades to all `hardlinks`; cleanup now checks for external aliases

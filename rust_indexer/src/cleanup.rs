@@ -276,27 +276,65 @@ fn collect_data_object_file_ids(
 fn delete_data_object_rows(
     repo: &DbRepoTransaction<'_>,
     data_object_id: u64,
+    expected_reference_count: u64,
 ) -> Result<(), String> {
-    repo.exec(&format!(
-        "DELETE FROM data_objects WHERE id_data_object = {data_object_id}"
+    let rows = repo.query_rows_text(&format!(
+        "DELETE FROM data_objects
+         WHERE id_data_object = {data_object_id}
+           AND reference_count = {expected_reference_count}
+         RETURNING id_data_object"
     ))?;
-    Ok(())
+    match rows.as_slice() {
+        [] => Err(format!(
+            "FOD_INDEXER_CLEANUP_DATA_OBJECT_CHANGED data_object_id={data_object_id} expected_reference_count={expected_reference_count}"
+        )),
+        [_] => {
+            let row = require_single_exact_row(&rows, 1, "deleted cleanup data object")?;
+            let deleted_id = parse_positive_u64(&row[0], "deleted data-object ID")?;
+            if deleted_id != data_object_id {
+                return Err(format!(
+                    "cleanup deleted unexpected data object: expected={data_object_id} actual={deleted_id}"
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "cleanup deleted multiple rows for data_object_id={data_object_id}"
+        )),
+    }
 }
 
 fn update_shared_data_object_reference_count(
     repo: &DbRepoTransaction<'_>,
     data_object_id: u64,
-    reference_count: u64,
+    removed_reference_count: u64,
 ) -> Result<(), String> {
-    repo.exec(&format!(
+    let rows = repo.query_rows_text(&format!(
         "
         UPDATE data_objects
-        SET reference_count = {reference_count},
+        SET reference_count = reference_count - {removed_reference_count},
             modification_date = NOW()
         WHERE id_data_object = {data_object_id}
+          AND reference_count >= {removed_reference_count}
+        RETURNING reference_count
         "
     ))?;
-    Ok(())
+    match rows.as_slice() {
+        [] => Err(format!(
+            "FOD_INDEXER_CLEANUP_REFCOUNT_UNDERFLOW data_object_id={data_object_id} removed_reference_count={removed_reference_count}"
+        )),
+        [_] => {
+            let row = require_single_exact_row(&rows, 1, "updated shared data-object count")?;
+            row[0]
+                .trim()
+                .parse::<u64>()
+                .map(|_| ())
+                .map_err(|err| format!("invalid updated data-object reference count: {err}"))
+        }
+        _ => Err(format!(
+            "cleanup updated multiple rows for data_object_id={data_object_id}"
+        )),
+    }
 }
 
 pub fn cleanup_failed_materialization(
@@ -348,7 +386,8 @@ pub fn cleanup_failed_materialization(
             let subtree_file_ids: BTreeSet<u64> =
                 file_rows.iter().map(|row| row.0).collect();
             let mut file_ids_by_data_object: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-            let mut exclusive_data_object_ids = Vec::new();
+            let mut exclusive_data_objects = Vec::new();
+            let mut shared_data_object_decrements = Vec::new();
 
             for (file_id, data_object_id, _, _) in &file_rows {
                 file_ids_by_data_object
@@ -357,7 +396,8 @@ pub fn cleanup_failed_materialization(
                     .push(*file_id);
             }
 
-            for (data_object_id, _) in file_ids_by_data_object {
+            for (data_object_id, imported_file_ids) in file_ids_by_data_object {
+                let removed_reference_count = imported_file_ids.len() as u64;
                 let all_file_ids = collect_data_object_file_ids(tx, data_object_id)?;
                 let outside_file_ids: Vec<u64> = all_file_ids
                     .into_iter()
@@ -365,7 +405,7 @@ pub fn cleanup_failed_materialization(
                     .collect();
 
                 if outside_file_ids.is_empty() {
-                    exclusive_data_object_ids.push(data_object_id);
+                    exclusive_data_objects.push((data_object_id, removed_reference_count));
                     exclusive_data_objects_removed =
                         exclusive_data_objects_removed.saturating_add(1);
                     continue;
@@ -380,11 +420,7 @@ pub fn cleanup_failed_materialization(
                     survivor_file_id,
                     outside_file_ids.len()
                 );
-                update_shared_data_object_reference_count(
-                    tx,
-                    data_object_id,
-                    outside_file_ids.len() as u64,
-                )?;
+                shared_data_object_decrements.push((data_object_id, removed_reference_count));
                 shared_data_objects_preserved = shared_data_objects_preserved.saturating_add(1);
             }
 
@@ -392,8 +428,19 @@ pub fn cleanup_failed_materialization(
                 tx.exec(&format!("DELETE FROM files WHERE id_file = {file_id}"))?;
             }
 
-            for data_object_id in exclusive_data_object_ids {
-                delete_data_object_rows(tx, data_object_id)?;
+            // Match normal unlink/write ordering: mutate file references before
+            // locking their data-object counters. PostgreSQL applies each
+            // arithmetic UPDATE atomically against the latest committed value.
+            for (data_object_id, removed_reference_count) in shared_data_object_decrements {
+                update_shared_data_object_reference_count(
+                    tx,
+                    data_object_id,
+                    removed_reference_count,
+                )?;
+            }
+
+            for (data_object_id, expected_reference_count) in exclusive_data_objects {
+                delete_data_object_rows(tx, data_object_id, expected_reference_count)?;
             }
 
             for (directory_id, _) in &directory_rows {

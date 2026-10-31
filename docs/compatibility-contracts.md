@@ -7,7 +7,7 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Current source version: FOD 3.4.513. POSIX evidence remains individually
+Current source version: FOD 3.4.514. POSIX evidence remains individually
 versioned by regression in the [POSIX audit](POSIX_CONFORMANCE_AUDIT.md); the
 current version does not imply that any Pending area is closed. Recent
 PostgreSQL result hardening rejects malformed booleans at lease, fencing,

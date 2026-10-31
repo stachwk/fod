@@ -26,18 +26,16 @@ Reading guide:
   aktywnego planu. Szczegóły ryzyka TX-03C w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
-- [ ] **Naprawić wyścig licznika współdzielonego obiektu w cleanup indeksatora.**
-  `rust_indexer/src/cleanup.rs` najpierw odczytuje pliki spoza importowanego
-  drzewa, a potem bezwarunkowo ustawia `data_objects.reference_count` na tę
-  wcześniejszą liczbę. Równoległa adopcja może zwiększyć licznik pomiędzy tymi
-  zapytaniami; późniejszy zapis cleanup nadpisze przyrost i purge może usunąć
-  obiekt wciąż używany. To wyprowadzono z kolejności transakcji SQL; brak
-  runtime reprodukcji. Nie dodawać prostego `FOR UPDATE` przed usunięciem
-  plików: ścieżki unlink/replacement aktualizują licznik po zmianie pliku i
-  może powstać deadlock. Najpierw ustalić wspólny porządek blokad dla cleanup,
-  adopcji, unlink/replacement oraz FK, następnie dodać deterministyczny test
-  dwóch transakcji sprawdzający dokładny licznik i payload każdego żywego pliku.
-  Szczegóły TX-03D: `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
+- [ ] **Dodać regresję współbieżnej adopcji i cleanup licznika obiektu.**
+  FOD 3.4.514 zastępuje zapis starej liczby referencji atomowym odjęciem liczby
+  usuwanych plików. PostgreSQL serializuje tę arytmetykę na wierszu obiektu, więc
+  równoległy przyrost nie jest nadpisywany. Usunięcie obiektu, który uznano za
+  wyłączny, jest warunkowe względem licznika oczekiwanego; zmiana powoduje
+  rollback zamiast skasowania potencjalnie używanego obiektu. Źródłowy
+  interleaving jest zidentyfikowany, ale regresji dwóch transakcji jeszcze nie
+  uruchomiono. Test ma sprawdzać dokładny licznik oraz zachowanie payloadu dla
+  każdego żywego pliku. Szczegóły TX-03D:
+  `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
 - [ ] **Dodać regresję zewnętrznego hardlinku dla cleanup importu.**
   FOD 3.4.513 odmawia cleanup, jeśli plik z importowanego drzewa ma alias
@@ -2649,3 +2647,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   check/delete race for new aliases. `cargo fmt --all --check`,
   `cargo check --offline -p fod-rust-indexer` and `git diff --check` pass;
   a direct database regression remains pending.
+
+## FOD 3.4.514 — serialize cleanup reference-count changes
+
+- [x] Replace stale absolute reference-count assignment with an atomic
+  subtraction for imported references. Require the current count to cover the
+  subtraction and fail closed on underflow. Delete exclusive data objects only
+  if their count still equals the number of imported references being removed;
+  a concurrent count change aborts the transaction. Formatting and indexer
+  compilation pass; a deterministic two-transaction regression remains
+  pending.

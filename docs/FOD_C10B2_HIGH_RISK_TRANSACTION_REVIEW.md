@@ -278,23 +278,27 @@ rozwiązuje odzyskiwania po awarii procesu, który pozostawił plan w stanie
 kontrolowane przejęcie po jego wygaśnięciu. Regresja bezpośrednio sprawdzająca
 odmowę dla aktywnego planu pozostaje do dodania i uruchomienia.
 
-### TX-03D — wyścig licznika współdzielonego obiektu (otwarty)
+### TX-03D — wyścig licznika współdzielonego obiektu (poprawka, test otwarty)
 
 Analiza kodu 2026-10-31 wykazała, że cleanup wylicza listę plików spoza
-importowanego drzewa, a następnie zapisuje jej długość do `reference_count`.
-Przy izolacji PostgreSQL Read Committed równoległa adopcja może zwiększyć
-licznik między odczytem listy a tym bezwarunkowym zapisem; cleanup może
-nadpisać nowszą wartość. Zbyt niski licznik może później doprowadzić do
-usunięcia nadal współdzielonego obiektu. Ten interleaving jest wyprowadzony z
-kolejności SQL; nie odtwarzano go w runtime.
+importowanego drzewa, a następnie zapisywał jej długość bezwarunkowo do
+`reference_count`. Równoległa adopcja mogła zwiększyć licznik między odczytem
+listy a zapisem cleanup, który nadpisywał przyrost.
 
-Nie zastosowano naiwnego `FOR UPDATE`: unlink/replacement zmienia wiersz pliku
-przed aktualizacją licznika, więc zablokowanie obiektu przed skasowaniem pliku
-może utworzyć cykl blokad. Dalsza praca musi ustalić wspólny porządek blokad
-dla cleanup, adopcji, unlink/replacement i FK plików, a następnie dodać
-deterministyczną regresję dwóch transakcji. Wymagany wynik: po każdej
-serializacji `reference_count` odpowiada liczbie referencji `files`, a żaden
-żywy plik nie traci payloadu. Szczegóły i zadanie są w `TODO.md`.
+FOD 3.4.514 rozwiązuje to przez atomowe odjęcie liczby referencji usuwanych z
+importu (`reference_count = reference_count - N`) z warunkiem
+`reference_count >= N` i `RETURNING`. Niespójność przerywa transakcję.
+Usuwanie obiektu uznanego za wyłączny ma warunek `reference_count = N`; jeśli
+równoległa operacja zmieni licznik, `DELETE` nie zwróci wiersza i cleanup
+wycofuje całą transakcję. Nie wprowadzono dodatkowych blokad obiektu przed
+usunięciem plików: wszystkie wiersze `files` są kasowane przed arytmetycznymi
+aktualizacjami współdzielonych liczników, zgodnie z kolejnością unlink/write.
+
+Poprawka wynika z semantyki atomowych aktualizacji wiersza PostgreSQL; runtime
+reprodukcja i deterministyczny test dwóch transakcji pozostają do wykonania.
+Test powinien sprawdzić, że licznik jest równy faktycznym referencjom `files`
+po każdej kolejności oraz że payload każdego żywego pliku jest zachowany.
+Szczegóły są w `TODO.md`.
 
 ### TX-03E — cleanup importu usuwał zewnętrzne aliasy hardlinku (guard dodany)
 
