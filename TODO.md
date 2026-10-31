@@ -14,6 +14,18 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Lokalne endpointy PostgreSQL mają starsze schematy niż aktualny kod FOD.**
+  Kontener `fod-postgres` na porcie 5432 ma `fod.schema_version=31`, a
+  kontenery deploymentu mają wersję 23; brakuje w nich m.in. tabeli
+  `symlink_hardlinks` wymaganej przez bieżący kod. Próba użycia ich jako
+  domyślnego DSN testów kończy się błędem `42P01` podczas przygotowania
+  połączenia, zanim test dojdzie do badanej operacji. Obraz PostgreSQL jest
+  poprawnie zbudowany z `--with-blocksize=32` i zwraca `block_size=32768`.
+  Testy aktualnego kodu należy uruchamiać po inicjalizacji/uaktualnieniu
+  izolowanej bazy do bieżącego schematu; w przeciwnym razie wskazać pustą bazę
+  administracyjną, z której harness tworzy bazę tymczasową. Przed pełnym
+  uruchomieniem `fod-rust-hotpath` trzeba potwierdzić stan schematu endpointu.
+
 - [ ] **`link()` do symlinka różni się od zachowania Linuksa.**
   Na lokalnym Linuksie 6.17 wywołanie `os.link(source, alias,
   follow_symlinks=False)` dla `source` będącego symlinkiem tworzy drugi wpis

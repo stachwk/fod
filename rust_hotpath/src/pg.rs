@@ -7050,20 +7050,28 @@ impl DbRepo {
                         Some(content_hash) => {
                             let params = [&file_size, content_hash];
                             let res = exec_params(conn, &sql_lookup_hash, &params)?;
-                            let existing = fetch_single_text(res)?;
-                            if let Ok(existing_id) = existing.trim().parse::<u64>() {
-                                let existing_id_text = CString::new(existing_id.to_string())
-                                    .map_err(|_| "data object id contains NUL byte".to_string())?;
-                                let params = [&existing_id_text];
-                                exec_command_params(conn, &sql_touch_existing, &params)?;
-                                existing_id
-                            } else {
-                                let params = [&file_size, content_hash];
-                                let res = exec_params(conn, &sql_insert_hash, &params)?;
-                                let text = fetch_single_text(res)?;
-                                text.trim()
-                                    .parse::<u64>()
-                                    .map_err(|_| "invalid id_data_object value".to_string())?
+                            match fetch_single_text_option(res)? {
+                                Some(existing) => {
+                                    let existing_id = existing
+                                        .trim()
+                                        .parse::<u64>()
+                                        .map_err(|_| "invalid id_data_object value".to_string())?;
+                                    let existing_id_text = CString::new(existing_id.to_string())
+                                        .map_err(|_| {
+                                            "data object id contains NUL byte".to_string()
+                                        })?;
+                                    let params = [&existing_id_text];
+                                    exec_command_params(conn, &sql_touch_existing, &params)?;
+                                    existing_id
+                                }
+                                None => {
+                                    let params = [&file_size, content_hash];
+                                    let res = exec_params(conn, &sql_insert_hash, &params)?;
+                                    let text = fetch_single_text(res)?;
+                                    text.trim()
+                                        .parse::<u64>()
+                                        .map_err(|_| "invalid id_data_object value".to_string())?
+                                }
                             }
                         }
                         None => {

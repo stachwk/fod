@@ -54,6 +54,13 @@ ownership. Lock-range state regressions now assert the persisted `lock_pid`
 field. The complete `fod-rust-hotpath` test suite passed on a fresh disposable
 PostgreSQL 16.15 database with verified `BLCKSZ=32KiB`.
 
+FOD 3.4.468 fixes legacy hash-based data-object deduplication: a lookup that
+finds no matching object now inserts one, while a malformed returned ID remains
+an error. `create_data_object_legacy_hash_lookup_handles_missing_row` verifies
+creation and reuse on a disposable database with the legacy schema-version
+gate. The test passed against PostgreSQL 16 with `pg_config --configure`
+reporting `--with-blocksize=32` and live `SHOW block_size = 32768`.
+
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and

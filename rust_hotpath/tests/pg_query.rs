@@ -3456,6 +3456,50 @@ fn create_data_object_reuses_matching_hash_and_size() -> Result<(), String> {
 }
 
 #[test]
+fn create_data_object_legacy_hash_lookup_handles_missing_row() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let conninfo = conninfo_for_database(&temporary_db.name);
+    let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    bootstrap_repo
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (5, NOW())")?;
+    drop(bootstrap_repo);
+
+    let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    if repo.schema_version()? != Some(5) {
+        return Err("legacy hash test did not initialize schema version 5".to_string());
+    }
+
+    let content_hash = format!("hash_{}", unique_name("rust_pg_legacy_hash"));
+    let file_size = 4096;
+    let first_id = repo.create_data_object(file_size, Some(&content_hash))?;
+    let second_id = repo.create_data_object(file_size, Some(&content_hash))?;
+    if first_id != second_id {
+        return Err(format!(
+            "legacy hash lookup created different objects for the same size and hash: {first_id} vs {second_id}"
+        ));
+    }
+
+    let reference_count = repo
+        .query_scalar_text(&format!(
+            "SELECT reference_count FROM data_objects WHERE id_data_object = {first_id}"
+        ))?
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("parse legacy hash reference_count: {err}"))?;
+    if reference_count != 2 {
+        return Err(format!(
+            "expected legacy hash lookup to reuse the object and increment reference_count to 2, got {reference_count}"
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn source_adoption_rejects_malformed_file_info_instead_of_falling_back() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
