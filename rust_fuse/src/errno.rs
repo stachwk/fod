@@ -46,7 +46,31 @@ pub(crate) fn namespace_mutation_errno(error: &str) -> c_int {
         EPERM
     } else if error.starts_with(NAMESPACE_PARENT_MISSING_PREFIX)
         || error == NAMESPACE_SOURCE_CHANGED
+        || error == "FOD_UNLINK_SOURCE_CHANGED"
+        || error == "FOD_LINK_SOURCE_UNAVAILABLE"
     {
+        ENOENT
+    } else {
+        EIO
+    }
+}
+
+/// Converts an xattr repository error into the Linux errno exposed by FOD.
+pub(crate) fn xattr_errno(error: &str) -> c_int {
+    match error {
+        "FOD_XATTR_OWNER_MISSING" => ENOENT,
+        "FOD_XATTR_EXISTS" => EEXIST,
+        "FOD_XATTR_MISSING" => ENODATA,
+        "FOD_XATTR_PERMISSION_DENIED" => EPERM,
+        "FOD_XATTR_ACCESS_DENIED" => EACCES,
+        "FOD_XATTR_NOT_SUPPORTED" => EOPNOTSUPP,
+        _ => EIO,
+    }
+}
+
+/// A missing file maps to `ENOENT`; lease/session failures fail closed as `EIO`.
+pub(crate) fn open_lease_errno(error: &str) -> c_int {
+    if error == "FOD_OPEN_FILE_UNAVAILABLE" {
         ENOENT
     } else {
         EIO

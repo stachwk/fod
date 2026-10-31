@@ -4699,11 +4699,7 @@ impl FodFuse {
             );
             // Only a genuinely unavailable file maps to ENOENT.
             // An expired/missing PostgreSQL client session must fail closed.
-            if err == "FOD_OPEN_FILE_UNAVAILABLE" {
-                ENOENT
-            } else {
-                EIO
-            }
+            crate::errno::open_lease_errno(&err)
         })
     }
 
@@ -6481,24 +6477,12 @@ impl Filesystem for FodFuse {
                     );
                     reply.ok();
                 }
-                Err(err) if err == "FOD_XATTR_OWNER_MISSING" => {
-                    fuse_reply_error!(reply, ENOENT);
-                }
-                Err(err) if err == "FOD_XATTR_EXISTS" => {
-                    fuse_reply_error!(reply, EEXIST);
-                }
-                Err(err) if err == "FOD_XATTR_MISSING" => {
-                    fuse_reply_error!(reply, ENODATA);
-                }
-                Err(err) if err == "FOD_XATTR_PERMISSION_DENIED" => {
-                    fuse_reply_error!(reply, EPERM);
-                }
                 Err(err) => {
                     warn!(
                         "FOD setxattr ACL transaction failed path={} err={}",
                         path, err
                     );
-                    fuse_reply_error!(reply, EIO);
+                    fuse_reply_error!(reply, crate::errno::xattr_errno(&err));
                 }
             }
             return;
@@ -6522,27 +6506,9 @@ impl Filesystem for FodFuse {
                 debug!("FOD setxattr stored path={} name={}", path, name);
                 reply.ok()
             }
-            Err(err) if err == "FOD_XATTR_OWNER_MISSING" => {
-                fuse_reply_error!(reply, ENOENT)
-            }
-            Err(err) if err == "FOD_XATTR_EXISTS" => {
-                fuse_reply_error!(reply, EEXIST)
-            }
-            Err(err) if err == "FOD_XATTR_MISSING" => {
-                fuse_reply_error!(reply, ENODATA)
-            }
-            Err(err) if err == "FOD_XATTR_PERMISSION_DENIED" => {
-                fuse_reply_error!(reply, EPERM)
-            }
-            Err(err) if err == "FOD_XATTR_ACCESS_DENIED" => {
-                fuse_reply_error!(reply, EACCES)
-            }
-            Err(err) if err == "FOD_XATTR_NOT_SUPPORTED" => {
-                fuse_reply_error!(reply, EOPNOTSUPP)
-            }
-            Err(_) => {
+            Err(err) => {
                 warn!("FOD setxattr failed path={} name={}", path, name);
-                fuse_reply_error!(reply, EIO)
+                fuse_reply_error!(reply, crate::errno::xattr_errno(&err))
             }
         }
     }
@@ -6726,21 +6692,9 @@ impl Filesystem for FodFuse {
                 debug!("FOD removexattr missing path={} name={}", path, name);
                 fuse_reply_error!(reply, ENODATA)
             }
-            Err(err) if err == "FOD_XATTR_OWNER_MISSING" => {
-                fuse_reply_error!(reply, ENOENT)
-            }
-            Err(err) if err == "FOD_XATTR_PERMISSION_DENIED" => {
-                fuse_reply_error!(reply, EPERM)
-            }
-            Err(err) if err == "FOD_XATTR_ACCESS_DENIED" => {
-                fuse_reply_error!(reply, EACCES)
-            }
-            Err(err) if err == "FOD_XATTR_NOT_SUPPORTED" => {
-                fuse_reply_error!(reply, EOPNOTSUPP)
-            }
-            Err(_) => {
+            Err(err) => {
                 warn!("FOD removexattr failed path={} name={}", path, name);
-                fuse_reply_error!(reply, EIO)
+                fuse_reply_error!(reply, crate::errno::xattr_errno(&err))
             }
         }
     }
@@ -8662,11 +8616,7 @@ impl Filesystem for FodFuse {
                 reply.ok();
             }
             Err(err) => {
-                let errno = if err == "FOD_UNLINK_SOURCE_CHANGED" {
-                    ENOENT
-                } else {
-                    crate::errno::namespace_mutation_errno(&err)
-                };
+                let errno = crate::errno::namespace_mutation_errno(&err);
                 self.log_request_error(
                     req_id,
                     "unlink",
@@ -10845,14 +10795,9 @@ impl Filesystem for FodFuse {
                 Ok(None) => fuse_reply_error!(reply, EIO),
                 Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(err) => fuse_reply_error!(
-                reply,
-                if err == "FOD_LINK_SOURCE_UNAVAILABLE" {
-                    ENOENT
-                } else {
-                    crate::errno::namespace_mutation_errno(&err)
-                }
-            ),
+            Err(err) => {
+                fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err))
+            }
         }
     }
 }
