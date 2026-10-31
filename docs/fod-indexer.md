@@ -29,6 +29,12 @@ use the same source-relative representation; hashing, file reads and import
 planning reconstruct the physical path with the source root and `Path::join`.
 Catalogue path identity must not apply logical separator normalization.
 
+PostgreSQL text columns cannot preserve arbitrary non-UTF-8 POSIX filename
+bytes. The indexer rejects a source root or relative path that is not valid
+UTF-8; scan fails before staging any rows and `clean` fails before deleting
+stale rows. It must not replace invalid bytes with U+FFFD, because that could
+make a different physical file look like the indexed path.
+
 Earlier scans converted backslashes into `/`, which could merge distinct
 entries or make hashing fail with `No such file or directory`. For a catalogue
 populated by that behavior, scan the affected source again, review
@@ -204,7 +210,9 @@ Scanner status values are explicit:
 - `unsupported_type`,
 - `stat_failed`.
 
-Unreadable files should be recorded and the scan should continue. A database write failure is the only case that should abort the scan.
+Unreadable files should be recorded and the scan should continue. A database
+write failure or a source path that cannot be represented faithfully as UTF-8
+aborts the scan; the latter prevents lossy filename aliases.
 While a scan runs, `fod-indexer scan --source <name>` prints periodic progress lines to stderr with the scanned-file counts, current file path, and elapsed time.
 While `fod-indexer hash --source <name>` runs, it prints periodic progress lines to stderr with candidate, partial, full, and retry-needed counts, plus the current file path and elapsed time.
 `fod-indexer report duplicates` skips zero-size duplicate groups so cache and lock noise do not dominate the report. In the current pipeline those groups should not appear because scan skips zero-length files before indexing.

@@ -15,6 +15,12 @@ pub fn register_source(
 ) -> Result<IndexSource, String> {
     let root_path = fs::canonicalize(path)
         .map_err(|err| format!("source path {path} is not accessible: {err}"))?;
+    let root_path_text = root_path.to_str().ok_or_else(|| {
+        format!(
+            "canonical source path contains a non-UTF-8 component: {}",
+            root_path.display()
+        )
+    })?;
     let name = source::resolve_source_name(name, kind, &root_path)?;
     let metadata = fs::metadata(&root_path)
         .map_err(|err| format!("source path {} is not readable: {err}", root_path.display()))?;
@@ -28,7 +34,7 @@ pub fn register_source(
     let id_source = repo.upsert_index_source_staged(&IndexSourceStageRow {
         name: name.clone(),
         kind: kind.as_str().to_string(),
-        root_path: root_path.to_string_lossy().to_string(),
+        root_path: root_path_text.to_string(),
     })?;
 
     Ok(IndexSource {

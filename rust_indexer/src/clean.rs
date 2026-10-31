@@ -62,7 +62,7 @@ fn current_source_tree(root_path: &Path) -> Result<SourceTreeState, String> {
                 if source::is_zero_length_file(metadata.len()) {
                     continue;
                 }
-                let relative_path = scan::relative_source_path(root_path, entry.path());
+                let relative_path = scan::relative_source_path(root_path, entry.path())?;
                 if source::is_ignored_index_path(root_path, &relative_path) {
                     continue;
                 }

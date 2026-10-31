@@ -14,6 +14,14 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Uruchomić regresję nie-UTF-8 nazw źródłowych indeksatora.**
+  `relative_source_path()` wcześniej używało `to_string_lossy()`, przez co
+  niepoprawne bajty nazwy mogły aliasować poprawną nazwę U+FFFD, a późniejszy
+  `Path::join()` mógł otworzyć inny plik niż ten ze skanu. Konwersja zwraca
+  teraz błąd; `scan` nie zapisuje częściowego snapshotu, `clean` nie usuwa
+  wpisów, a rejestracja odrzuca nie-UTF-8 canonical root. Test jednostkowy
+  regresji dodano w `rust_indexer/src/scan.rs`; nie został jeszcze uruchomiony.
+
 - [ ] **Bezpiecznie odzyskiwać import pozostawiony w `materialize_running`.**
   `cleanup-failed` odmawia usunięcia drzewa, gdy plan pozostaje
   `materialize_running`. FOD 3.4.515 obejmuje już błędy setupu po zapisaniu

@@ -53,14 +53,32 @@ fn file_kind_label(file_type: &FileType) -> &'static str {
     }
 }
 
-pub(crate) fn relative_source_path(root_path: &Path, entry_path: &Path) -> String {
+pub(crate) fn relative_source_path(root_path: &Path, entry_path: &Path) -> Result<String, String> {
     // POSIX backslashes belong to filename components. Replacing them with
     // slashes aliases distinct files and makes root.join(path) reopen a different path.
-    entry_path
-        .strip_prefix(root_path)
-        .unwrap_or(entry_path)
-        .to_string_lossy()
-        .into_owned()
+    let relative_path = entry_path.strip_prefix(root_path).map_err(|_| {
+        format!(
+            "source entry {} is outside registered root {}",
+            entry_path.display(),
+            root_path.display()
+        )
+    })?;
+    relative_path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .map(|component| {
+            component.to_str().map(str::to_string).ok_or_else(|| {
+                format!(
+                    "source-relative path contains a non-UTF-8 component: {}",
+                    entry_path.display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|components| components.join("/"))
 }
 
 pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
@@ -96,7 +114,7 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
 
             summary.scanned_files = summary.scanned_files.saturating_add(1);
             let entry_path = entry.path().to_path_buf();
-            let relative_path = relative_source_path(&source.root_path, &entry_path);
+            let relative_path = relative_source_path(&source.root_path, &entry_path)?;
             let file_kind = file_kind_label(&entry.file_type());
 
             if file_kind != "regular" {
@@ -365,7 +383,7 @@ mod tests {
         }
         let mut stored_paths = std::collections::BTreeSet::new();
         for (index, name) in names.iter().enumerate() {
-            let stored = relative_source_path(&root, &root.join(name));
+            let stored = relative_source_path(&root, &root.join(name)).unwrap();
             assert_eq!(stored, *name);
             assert!(
                 stored_paths.insert(stored.clone()),
@@ -373,6 +391,32 @@ mod tests {
             );
             assert_eq!(fs::read(root.join(stored))?, [index as u8, 0, 255]);
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_paths_reject_non_utf8_components_instead_of_aliasing() -> std::io::Result<()> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let serial = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tree = SourceTree(std::env::temp_dir().join(format!(
+            "fod-indexer-invalid-path-{}-{serial}",
+            std::process::id()
+        )));
+        fs::create_dir_all(&tree.0)?;
+        let invalid_name = std::ffi::OsString::from_vec(b"bad-\xff-name".to_vec());
+        let invalid_path = tree.0.join(invalid_name);
+        fs::write(&invalid_path, b"payload")?;
+
+        let error = relative_source_path(&tree.0, &invalid_path).unwrap_err();
+        assert!(
+            error.contains("non-UTF-8 component"),
+            "unexpected error: {error}"
+        );
         Ok(())
     }
 }

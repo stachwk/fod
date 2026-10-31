@@ -119,7 +119,12 @@ fn suggested_source_name(kind: SourceKind, root_path: &Path) -> Option<String> {
 
 fn is_ignored_directory_relative_path(relative_path: &Path) -> bool {
     let settings = config::indexer_settings();
-    let normalized = normalize_path(relative_path);
+    // Invalid UTF-8 must reach scan's explicit rejection path. A lossy
+    // replacement here could make an invalid name match an unrelated ignore
+    // prefix and hide an old lossy catalogue alias from cleanup.
+    let Some(normalized) = normalize_path(relative_path) else {
+        return false;
+    };
     if settings
         .skip_prefixes
         .iter()
@@ -129,7 +134,9 @@ fn is_ignored_directory_relative_path(relative_path: &Path) -> bool {
     }
 
     relative_path.components().any(|component| match component {
-        Component::Normal(value) => is_ignored_component(&value.to_string_lossy(), settings),
+        Component::Normal(value) => value
+            .to_str()
+            .is_some_and(|value| is_ignored_component(value, settings)),
         _ => false,
     })
 }
@@ -487,15 +494,15 @@ fn sanitize_label(value: &str) -> Option<String> {
     }
 }
 
-fn normalize_path(relative_path: &Path) -> String {
+fn normalize_path(relative_path: &Path) -> Option<String> {
     relative_path
         .components()
         .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            Component::Normal(value) => Some(value.to_str().map(str::to_string)),
             _ => None,
         })
-        .collect::<Vec<_>>()
-        .join("/")
+        .collect::<Option<Vec<_>>>()
+        .map(|components| components.join("/"))
 }
 
 fn ensure_indexer_settings_loaded() {
