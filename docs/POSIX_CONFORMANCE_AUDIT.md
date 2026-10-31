@@ -1,11 +1,17 @@
 # POSIX conformance audit
 
-Status reviewed through source baseline FOD 3.4.439 (2026-10-31):
+Status reviewed through source baseline FOD 3.4.440 (2026-10-31):
 **requirement audit in progress; no general POSIX conformance claim**. Recent
 work adds Linux/FUSE killpriv evidence for P07, but does not close a full POSIX
 matrix area. The enforced Linux minimum is 6.17.0 and the enforced libfuse3
 minimum is 3.18.2; focused mounted regressions passed with libfuse3 3.18.2 and
 3.18.3.
+
+FOD 3.4.440 extends the pathname mounted regression to `rename()` name-length
+limits. A destination with `NAME_MAX + 1` bytes returns exact `ENAMETOOLONG`
+and leaves the source payload/name intact; renaming to a component exactly at
+`NAME_MAX` succeeds and preserves the payload. This adds one bounded P01/P08
+case and does not close either requirement area.
 
 FOD 3.4.439 adds mounted transaction-failure coverage for replacement
 `rename()`: PostgreSQL SQLSTATE `53100` maps to `ENOSPC`, `58030` maps to

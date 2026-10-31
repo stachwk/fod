@@ -1983,3 +1983,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   an isolated database, which was dropped after the run.
 - [ ] P08 remains Pending for remaining rename permission/error-precedence,
   limit and broader operation coverage.
+
+## FOD 3.4.440 — verify `rename()` `NAME_MAX` handling
+
+- [x] Extend the mounted pathname regression to rename a file to a component
+  exactly `PC_NAME_MAX` bytes long and to reject a destination one byte longer
+  with `ENAMETOOLONG`. The rejected call must preserve the source name and
+  payload; the boundary-length rename must preserve the payload. This closes
+  only this specific P01/P08 case; both audit areas remain Pending.
