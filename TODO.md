@@ -730,11 +730,11 @@ Reading guide:
   so 32-bit `ino_t` conversion coverage is outside the supported matrix. The
   mounted snapshot regression now traverses 512 initial entries and checks
   direct libc `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT`
-  from `opendir()` for a missing path, plus `EMFILE` after exhausting the process
-  descriptor limit. The regression now asserts that `closedir()` returns
+  from `opendir()` for a missing path, plus `EMFILE` for `opendir()` and `open()`
+  after exhausting the process descriptor limit. The regression now asserts that `closedir()` returns
   `EBADF` after its owned descriptor is closed externally. Its libc helper passed
-  against a local directory; the two-mount FUSE test could not run because no
-  PostgreSQL server was available. System-wide `ENFILE` and namespace errno
+  against a local directory, including the new `open()`/`EMFILE` assertion;
+  the two-mount FUSE test could not run because no PostgreSQL server was available. System-wide `ENFILE` and namespace errno
   checks remain unverified on supported 64-bit-and-wider systems; do not provision
   or build
   a 32-bit FOD target for the narrow-inode `EOVERFLOW` case.

@@ -134,6 +134,16 @@ def check_libc_directory_stream(path: Path, expected_entries: int) -> None:
             raise AssertionError(
                 f"libc opendir errno={error}, expected EMFILE ({errno.EMFILE})"
             )
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as exc:
+            if exc.errno != errno.EMFILE:
+                raise AssertionError(
+                    f"open() errno={exc.errno}, expected EMFILE ({errno.EMFILE})"
+                ) from exc
+        else:
+            os.close(fd)
+            raise AssertionError("open() succeeded after exhausting the fd limit")
     finally:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft_limit, hard_limit))
 
@@ -244,7 +254,7 @@ def main() -> None:
 
     print(
         "OK: 512-entry cross-mount snapshot has stable continuation, rewind refresh, "
-        "direct libc readdir/errno coverage, and closedir EBADF"
+        "open/opendir EMFILE, direct libc readdir/errno coverage, and closedir EBADF"
     )
 
 
