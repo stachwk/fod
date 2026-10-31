@@ -5,16 +5,13 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: commit `b592fec` (`FOD 3.4.395`); this documentation
-refresh is recorded in FOD 3.4.396. No runtime behavior changed in this
-refresh. The latest mounted
-`statvfs()` signal-interruption regression cited below passed on FOD 3.4.387;
-3.4.391 fixes `st_nlink` saturation at the FUSE ABI limit; its conversion
-boundary has a unit test but no mounted test with an unrepresentably large link
-count. The 3.4.392 review classifies native `stat()` overflow for the audited
-x86_64 ABI. FOD 3.4.393 added a `closedir()` `EBADF` assertion. FOD 3.4.394
-adds an `open()` `EMFILE` assertion at the process descriptor limit. The local
-helper passed; the two-mount test could not run without PostgreSQL. No new POSIX area
+Reviewed source baseline: commit `e4510f0` (`FOD 3.4.397`). The POSIX audit
+remains open; the 3.4.397 copy-source fencing fix improves multi-host data
+correctness but does not close a POSIX audit area. The latest POSIX-specific
+mounted evidence remains the individually versioned cases recorded in the
+[POSIX audit](POSIX_CONFORMANCE_AUDIT.md). Its two latest directory-stream
+error assertions (`EMFILE` on `open()` and `EBADF` on `closedir()`) have only
+passed their local helper so far, not the mounted regression. No new POSIX area
 is marked Pass.
 
 ## Overall filesystem compatibility status
@@ -30,7 +27,7 @@ POSIX.
 | --- | --- | --- | --- |
 | POSIX.1-2024 | Audyt wymagań w toku; brak ogólnej deklaracji zgodności | Dwie grupy przypadków `lseek()` mają status Pass: zwykłe pozycjonowanie oraz `SEEK_DATA`/`SEEK_HOLE`. | 12 obszarów P01–P12 pozostaje Pending, ponieważ ich pełny zakres wymagań, błędów lub dowodów nie został zamknięty. Szczegóły i kryteria zamknięcia są w [audycie POSIX](POSIX_CONFORMANCE_AUDIT.md). |
 | Linux kernel/VFS | Zgodność sprawdzona dla wybranych zachowań Linux v6.17 | Testy montowane i przegląd źródeł v6.17 obejmują m.in. rozwiązywanie ścieżek, errno, uprawnienia, deskryptory i skróty VFS przed callbackiem. | Linux 4.18 jest egzekwowanym minimum, ale brak montowanego testu end-to-end na tej wersji. Nie ma pełnej macierzy wersji/dystrybucji ani audytu wszystkich zachowań jądra. |
-| FUSE/libfuse | Frontend działa przez `fuser 0.18.0`/libfuse3; protokół i capability są negocjowane w runtime | Najnowszy zapisany zestaw montowany: Linux 6.17, libfuse3 3.17.4; testy wybranych callbacków, negocjacji i przerwań. | libfuse3 3.0.0 jest egzekwowanym minimum bez testu mounta na tej wersji. Nie wszystkie operacje mają callback FOD; lista implementacji i pominięć niżej oraz w [wymaganiach FUSE](FUSE_REQUIREMENTS.md). |
+| FUSE/libfuse | Frontend działa przez `fuser 0.18.0`/libfuse3; protokół i capability są negocjowane w runtime | Najnowszy zapisany zestaw montowany: Linux 6.17, libfuse3 3.17.4; testy wybranych callbacków, negocjacji i przerwań. | libfuse3 3.0.0 jest egzekwowanym minimum bez testu mounta na tej wersji. Nie wszystkie operacje mają callback FOD; właścicielem szczegółowej listy jest [przewodnik Linux/FUSE](FUSE_REQUIREMENTS.md). |
 
 `Pass` oznacza wyłącznie wskazaną grupę przypadków, a nie cały obszar POSIX.
 Linuxowe zachowanie syscalla nie dowodzi, że request dotarł do callbacku FOD.
@@ -53,24 +50,12 @@ właścicielem minimalnych wersji i zakresu callbacków. Wnioski z innych
 dokumentów powinny linkować do tych właścicieli, zamiast tworzyć równoległe
 liczniki zgodności.
 
-FOD exposes filesystem operations through Linux FUSE. The application-visible
-result is produced by Linux VFS, FUSE protocol/libfuse and FOD callbacks
-together; success at the syscall boundary does not identify which layer
-implemented or rejected an operation. The [POSIX audit](POSIX_CONFORMANCE_AUDIT.md)
-uses POSIX.1-2024 Issue 8 as its baseline and makes no general POSIX-conformance
-claim.
-
-| Area | Implemented boundary | Verification status |
-| --- | --- | --- |
-| POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Issue 8 audit remains open: 2 `lseek()` case groups are Pass and 12 areas remain Pending. No overall POSIX conformance claim is made. P07 includes paused-replica checks for `open()` denial and `access(X_OK)` refresh with kernel `default_permissions`; `statvfs()` has a mounted `EINTR` regression. The detailed P01-P12 ledger owns remaining work. |
-| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. Linux VFS performs pathname, descriptor, permission and syscall work before or after FUSE callbacks. | Version-gate unit tests cover the declared floor; source-level Linux v6.17 review classifies selected VFS behavior and errno precedence. Recorded mounted evidence is concentrated on Linux 6.17; no end-to-end run on Linux 4.18 is recorded. Linux-specific differences and callback short-circuits are attributed in the errno matrix. |
-| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no minimum-version mount run. Writable mounts require negotiated `FUSE_ATOMIC_O_TRUNC`; POSIX/flock locking capabilities are requested and ACL capability is conditional. `FUSE_INTERRUPT` is tested for blocked `statfs` and POSIX lock requests. Callback coverage and omissions are listed below. |
-| Product platform | 64-bit and wider userspace only | 32-bit binaries and ABI targets are outside the support matrix. |
-
-This summary deliberately distinguishes a declared runtime floor from tested
-platform combinations and from POSIX requirements. The detailed current Linux
-and FUSE requirements, including the remaining minimum-stack validation gap,
-are in [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
+Wynik widziany przez aplikację tworzą wspólnie Linux VFS, uzgodniony protokół
+FUSE/libfuse i callbacki FOD. Sukces syscalla nie wskazuje sam w sobie, która
+warstwa wykonała lub odrzuciła operację. Powyższa tabela jest jedynym skróconym
+podsumowaniem statusu. Wymagania POSIX opisuje
+[`POSIX_CONFORMANCE_AUDIT.md`](POSIX_CONFORMANCE_AUDIT.md), a minimum Linux,
+negocjację FUSE i listę callbacków — [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
 ## Supported Build Architectures
 
@@ -121,39 +106,10 @@ POSIX behavior is documented as outside supported-platform coverage.
   passed mounted tests. The latest recorded mounted stack is Linux 6.17 with
   libfuse 3.17.4.
 
-### Callback status
-
-| Status | Operations |
-| --- | --- |
-| Explicit and tested for selected behavior | init, lookup, forget, getattr, opendir/readdir/releasedir, readlink, statfs, xattr operations, access, poll, open/create, POSIX/flock locking, flush, fsync, read/write/release, setattr, namespace operations, copy_file_range, mknod, symlink, link |
-| Explicit but not comprehensively exercised | ioctl, bmap, fallocate (supported mode subset), lseek (`SEEK_DATA`/`SEEK_HOLE`) |
-| Not explicitly implemented | destroy, batch_forget, readdirplus, fsyncdir |
-| Not exposed by the inspected high-level API | native SYNCFS, TMPFILE, STATX callbacks |
-
-`opendir()` checks the directory and read permission and creates FOD directory
-handle state; `releasedir()` drops that state. These callbacks exist in
-`rust_fuse/src/fs.rs`; their presence alone does not imply complete POSIX
-directory-stream conformance. `readdir()` has separate mounted coverage.
-
-Syscall success through a kernel or library fallback is not proof that FOD
-implements the corresponding callback.
-
-Linux FUSE sends the `lseek` callback for `SEEK_DATA` and `SEEK_HOLE`; the
-kernel handles ordinary `SEEK_SET`, `SEEK_CUR` and `SEEK_END` positioning.
-POSIX.1-2024 now specifies `SEEK_DATA` and `SEEK_HOLE` in Issue 8, although
-they were Linux/BSD-style extensions in earlier editions. FOD's mounted tests
-cover both the kernel-handled positioning cases and its sparse-seek callback.
-
-### Priority follow-ups
-
-- add explicit failure-injection coverage for `fsync` once a narrow mounted
-  PostgreSQL error-injection harness exists;
-- measure inode/path cache retention and add `forget` plus `batch_forget` when
-  the lookup-reference lifecycle is defined;
-- connect selected `fallocate` modes to existing resize and sparse-storage
-  machinery and reject unsupported combinations;
-- benchmark `readdirplus` before enabling it;
-- repeat the callback/capability inventory after every `fuser` upgrade.
+The FUSE callback inventory, including implemented-but-partially-tested and
+unavailable operations, has one owner in
+[`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md). A successful syscall may be
+handled by Linux VFS or a library fallback without invoking an FOD callback.
 
 ## Rust and C boundary
 

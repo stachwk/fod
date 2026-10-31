@@ -1,9 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.395 (`b592fec`), dokumentacja
-uporządkowana dla FOD 3.4.396. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.397 (`e4510f0`). Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.396.
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.397.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -75,16 +74,25 @@ callback FOD został wywołany. Dokładne przykłady i przypisanie errno są w
 | Brak jawnej implementacji FOD | destroy, batch_forget, readdirplus, fsyncdir |
 | Brak callbacku w używanym wysokopoziomowym API fuser | natywne SYNCFS, TMPFILE i STATX |
 
-Callbacki `opendir()` i `releasedir()` są jawnie zaimplementowane w
-`rust_fuse/src/fs.rs`; `opendir()` sprawdza typ katalogu i prawo odczytu, a
-`releasedir()` zwalnia stan uchwytu. Wcześniejsza wersja tej tabeli błędnie
-zaliczała je do domyślnego zachowania `fuser`.
+`opendir()` sprawdza typ katalogu i prawo odczytu oraz tworzy stan uchwytu;
+`releasedir()` zwalnia ten stan. Zwykłe `SEEK_SET`, `SEEK_CUR` i `SEEK_END`
+obsługuje kernel, a callback FOD `lseek` jest używany dla
+`SEEK_DATA`/`SEEK_HOLE`. POSIX.1-2024 określa te dwa ostatnie whence jako
+opcjonalne zachowanie; wcześniejsze wydania traktowały je jako rozszerzenie
+Linux/BSD. Zgodność samego syscalla nie oznacza wywołania callbacku.
+Nieobsługiwane callbacki i capability oceniamy per operacja, nie na podstawie
+samego numeru protokołu.
 
-Zwykłe `SEEK_SET`, `SEEK_CUR` i `SEEK_END` obsługuje kernel na podstawie
-atrybutów inode; FOD implementuje callback dla sparse `SEEK_DATA` i
-`SEEK_HOLE`. Brak callbacku lub capability trzeba oceniać per operacja, a nie
-na podstawie samej wersji protokołu. Szczegółowy spis oraz follow-upy są w
-[kontraktach kompatybilności](compatibility-contracts.md).
+## Otwarte prace w warstwie FUSE
+
+- dodać test błędów `fsync`, gdy będzie dostępny wąski mechanizm wstrzykiwania
+  błędów PostgreSQL w teście montowanym;
+- zmierzyć retencję cache inode/ścieżek i rozważyć `forget`/`batch_forget` po
+  zdefiniowaniu cyklu życia referencji lookup;
+- podłączyć wybrane tryby `fallocate` do obsługi resize i sparse oraz odrzucać
+  nieobsługiwane kombinacje;
+- zmierzyć korzyści `readdirplus` przed jego włączeniem;
+- powtarzać inwentaryzację callbacków i capability po aktualizacji `fuser`.
 
 ## Co zostało zweryfikowane
 
@@ -136,6 +144,7 @@ gwarancją wydajności na aktualnym kernelu.
 ## Źródła
 
 - [Linux kernel: FUSE technical documentation](https://docs.kernel.org/filesystems/fuse/)
+- [libfuse: userspace reference implementation and API documentation](https://github.com/libfuse/libfuse)
 - [Linux v6.17: nagłówek protokołu FUSE i negocjacja wersji](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h)
 - Implementacja preflight: `rust_fuse/src/platform_requirements.rs`.
 - Negocjacja i diagnostyka: `rust_fuse/src/compatibility.rs`.
