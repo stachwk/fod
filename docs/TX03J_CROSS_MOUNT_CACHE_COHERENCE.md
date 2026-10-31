@@ -41,6 +41,33 @@ zbuforowanych stron jadra bez mechanizmu ich uniewazniania.
 4. **TX03J.4 — multi-host**: powtorzyc po obu stronach oddzielnych hostow,
    sprawdzic TTL, recovery po rozlaczeniu oraz obciazenie PostgreSQL.
 
+### Granica sukcesu zapisu i invalidacji
+
+Samo `LISTEN/NOTIFY` ani walidacja generacji w callbacku FUSE nie zapewnia
+silnego kontraktu: kernel moze obsluzyc odczyt z page cache bez wywolania
+daemona, a powiadomienie moze dotrzec do innego mountu po powrocie `fsync()`.
+Poniewaz decyzja projektu wymaga widocznosci zatwierdzonego zapisu po udanym
+`fsync()`, potrzebna jest bariera potwierdzen invalidacji:
+
+1. `fsync()` odczytuje z primary zatwierdzona generacje pliku i granice zdarzen
+   invalidacji objeta bariera.
+2. Kazdy aktywny mount zarejestrowany przed ta granica musi odebrac trwale
+   zdarzenie dla `file_id`, wyczyscic tylko lokalne cache tego pliku, wyslac
+   `FUSE_NOTIFY_INVAL_INODE` dla znanego inode i zapisac ACK po przyjeciu
+   invalidacji przez kernel.
+3. `fsync()` moze zwrocic sukces dopiero, gdy ACK obejma wszystkie mounty
+   uczestniczace w barierze. Nieosiagalny mount lub brak ACK oznacza brak
+   potwierdzenia spojnosci i nie moze zostac uznany za sukces `fsync()`.
+   Dane moga byc juz trwale zapisane w PostgreSQL mimo bledu odpowiedzi.
+4. Mount uruchomiony po granicy nie ma starego page cache z poprzedniej sesji;
+   mount odzyskujacy polaczenie musi odtworzyc trwale zdarzenia przed
+   udostepnieniem odczytow.
+
+Zdarzenia i ACK musza byc autorytatywne w PostgreSQL. `NOTIFY` moze jedynie
+przyspieszac ich dostarczenie. Invalidacja pozostaje per-file; globalne
+czyszczenie cache jest zabronione. Ta bariera jest wymogiem do zaprojektowania
+i wdrozenia, nie obecna gwarancja FOD.
+
 ## Kryterium zamkniecia
 
 Nie zamykamy TX03J po samym poprawnym fencing. Nowe odczyty z A musza

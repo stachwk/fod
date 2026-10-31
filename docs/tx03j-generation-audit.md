@@ -49,7 +49,12 @@ remote event, and no SQL fill started before invalidation may publish later.
 2. Cache coherence also requires selective Linux FUSE kernel page-cache
    invalidation, and safe handling of open readers, local dirty buffers,
    and race ordering. Notifications are only hints; missing notifications
-   require durable reconciliation.
+   require durable reconciliation. The accepted post-`fsync()` cross-mount
+   contract also needs a PostgreSQL-backed ACK barrier: every mount active at
+   the barrier must acknowledge targeted kernel invalidation before `fsync()`
+   reports success. A timeout cannot be treated as success; the data may
+   already be committed even if the syscall reports failure. The protocol is
+   specified in [`TX03J_CROSS_MOUNT_CACHE_COHERENCE.md`](TX03J_CROSS_MOUNT_CACHE_COHERENCE.md).
 3. When reading from replicas, a generation/content snapshot may lag a
    committed primary change; fencing reads or ensuring a sufficiently
    advanced replica snapshot is necessary.
