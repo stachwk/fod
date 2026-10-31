@@ -74,14 +74,19 @@ role, and record the observed value in the test or audit result. Use the
 32KiB FOD build unless the task explicitly targets the 8KiB compatibility
 variant.
 
-The 32KiB build compiles PostgreSQL source in the builder stage with
-`--with-blocksize=32`, then verifies the configured `pg_config` and a fresh
-`initdb` cluster's `block_size` before publishing. For in-container checks, use
-the custom binaries under `/opt/postgresql-custom/bin` (or a non-login shell):
-a login shell may reset `PATH` to `/usr/local/bin` and inspect the upstream
-8KiB binaries instead of the running FOD build. Verify the live server with
-`SHOW block_size` using the configured PostgreSQL role; an image tag or label
-alone is not evidence of the running server's page size.
+The 32KiB build uses the selected official PostgreSQL image as its base, obtains
+the matching PostgreSQL source release, and recompiles it in the builder stage
+with `--with-blocksize=32`. The custom server and extensions built against its
+`pg_config` are installed under `/opt/postgresql-custom`; the stock binaries in
+the base image are not the FOD server. The Docker build verifies the custom
+`pg_config` configuration and a fresh `initdb` cluster's `block_size`, and the
+publisher repeats the version and page-size checks before publishing. For
+in-container checks, use the custom binaries under
+`/opt/postgresql-custom/bin` (or a non-login shell): a login shell may reset
+`PATH` to `/usr/local/bin` and inspect the upstream 8KiB binaries instead of the
+running FOD build. Verify the live server with `SHOW block_size` using the
+configured PostgreSQL role; an image tag or label alone is not evidence of the
+running server's page size.
 
 ## Supported build architectures
 
