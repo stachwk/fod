@@ -3,7 +3,7 @@
 
 use std::ffi::CStr;
 
-pub(crate) const MIN_LINUX_KERNEL: (u32, u32, u32) = (4, 18, 0);
+pub(crate) const MIN_LINUX_KERNEL: (u32, u32, u32) = (6, 17, 0);
 pub(crate) const MIN_LIBFUSE_VERSION: i32 = 300;
 
 unsafe extern "C" {
@@ -104,12 +104,14 @@ mod tests {
             Some((4, 18, 0))
         );
         assert_eq!(parse_kernel_version("6.12-amd64"), Some((6, 12, 0)));
-        assert!(validate_versions("4.18.0-553.el8_10.x86_64", 300).is_ok());
+        assert!(validate_versions("6.17.0", 300).is_ok());
+        assert!(validate_versions("6.17.0-41-generic", 300).is_ok());
+        assert!(validate_versions("6.18.0", 300).is_ok());
     }
 
     #[test]
     fn rejects_old_or_unparseable_kernel_and_old_libfuse() {
-        assert!(validate_versions("4.17.19", 317)
+        assert!(validate_versions("6.16.99", 317)
             .unwrap_err()
             .contains("too old"));
         assert!(validate_versions("not-a-kernel", 317)

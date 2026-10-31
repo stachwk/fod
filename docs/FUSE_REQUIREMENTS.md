@@ -15,7 +15,7 @@ a zestawienie granic POSIX, Linux VFS i FUSE znajduje się w
 Kod `rust_fuse/src/platform_requirements.rs` wymusza przed połączeniem z bazą
 i próbą montowania wersje:
 
-- Linux 4.18.0 lub nowszy;
+- Linux 6.17.0 lub nowszy;
 - libfuse3 3.0.0 lub nowszy;
 
 Do samego mounta host musi ponadto udostępniać `/dev/fuse` i zgodne narzędzie
@@ -23,10 +23,11 @@ montujące, zwykle `fusermount3`; brak któregoś z tych elementów zakończy
 uruchomienie na etapie tworzenia sesji/mounta.
 
 Nieparsowalna albo starsza wersja jądra oraz za stara libfuse kończą start
-błędem. To jest deklarowany próg runtime i kontrola w kodzie. Pełny mount na
-minimalnej parze Linux 4.18/libfuse3 3.0 nie jest obecnie potwierdzony testem
-end-to-end; zweryfikowany zestaw testowy niżej jest nowszy. Nie należy
-interpretować progu preflight jako macierzy przetestowanych dystrybucji.
+błędem. To jest deklarowany próg runtime i kontrola w kodzie. Testy montowane
+działają na Linux `6.17.0-41-generic`, więc minimalna linia jądra ma pokrycie;
+nie zweryfikowano jednak pary z libfuse3 3.0.0. Nie należy interpretować progu
+preflight jako macierzy przetestowanych dystrybucji. Użyta w testach libfuse3
+3.17.4 jest nowsza od zadeklarowanego minimum.
 
 Pakiet musi też dostarczać SONAME/ABI libfuse zgodny z binarium. Numer wersji
 sprawdzany przez FOD nie zastępuje kontroli zależności ELF.
@@ -113,16 +114,16 @@ Mounted regresja `statvfs()` blokuje zapytanie na tabeli PostgreSQL, wysyła
 przechwycony `SIGUSR1` i potwierdza `EINTR`; Linux dokumentuje, że FUSE
 userspace może odpowiedzieć `EINTR` na pierwotne żądanie po `FUSE_INTERRUPT`
 ([opis zachowania](https://github.com/torvalds/linux/blob/v6.17/Documentation/filesystems/fuse/fuse.rst)).
-Test jednostkowy preflight sprawdza granicę wersji 4.18.0 oraz odrzucenie
+Test jednostkowy preflight sprawdza granicę wersji 6.17.0 oraz odrzucenie
 starszego/nieparsowalnego jądra i libfuse poniżej 3.0.0.
 
 Nie ma obecnie udokumentowanej macierzy end-to-end dla minimalnych wersji
 Linux/libfuse ani wielu dystrybucji. Sprawdzony 2026-10-31 host działa na
-Linux `6.17.0-41-generic` i libfuse 3.17.4; `/dev/fuse` jest dostępne, ale
-lokalnie nie ma kernela 4.18 ani `qemu-system-x86_64`, więc nie można z niego
-uruchomić minimalnego kernela w VM. Zamknięcie tej luki wymaga uruchomienia
-zamontowanego zestawu na najstarszej wspieranej parze albo podniesienia
-deklarowanego minimum do najstarszej pary faktycznie zweryfikowanej.
+Linux `6.17.0-41-generic` i libfuse 3.17.4; `/dev/fuse` jest dostępne.
+Weryfikuje to mount na deklarowanej linii jądra, ale nie na minimalnym libfuse3
+3.0.0. Nie ma lokalnie środowiska pozwalającego uruchomić tę minimalną wersję
+libfuse. Pozostaje uruchomić montowany zestaw na Linux 6.17/libfuse3 3.0 albo
+podnieść minimalną wersję libfuse do najstarszej faktycznie zweryfikowanej.
 
 ## Rozmiar requestu i strojenie
 

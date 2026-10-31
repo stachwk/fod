@@ -22,9 +22,9 @@ Current result: the standard and sparse `lseek()` groups are the only matrix
 areas marked Pass. The other 12 areas remain Pending; targeted regressions close
 individual cases without upgrading a broader area. The mounted primary/replica
 test on FOD 3.4.387 also verifies that a caught signal interrupts a blocked
-`statvfs()` call with `EINTR` (P11/P12). Linux 6.17 and libfuse 3.17.4 are the
-latest recorded mounted stack; Linux 4.18/libfuse3 3.0 remain declared minimums
-without a minimum-stack end-to-end run.
+`statvfs()` call with `EINTR` (P11/P12). Linux 6.17.0-41 and libfuse 3.17.4
+are the latest recorded mounted stack. Linux 6.17.0 is now the enforced kernel
+minimum; the declared libfuse3 3.0.0 minimum has no end-to-end validation.
 
 The reviewed source baseline is FOD 3.4.398. The preceding whole-object
 `copy_file_range` source-write fencing change concerns multi-host data-object

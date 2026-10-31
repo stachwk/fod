@@ -81,7 +81,7 @@ worthwhile candidates in the reviewed area have been addressed.
 ## Linux and libfuse runtime floor
 
 Keep the minimum supported mount runtime explicit and fail closed before a
-mount is attempted. FOD requires Linux 4.18.0 or newer and libfuse3 3.0.0 or
+mount is attempted. FOD requires Linux 6.17.0 or newer and libfuse3 3.0.0 or
 newer. Changes to the FUSE frontend, its dependencies or required negotiated
 capabilities must re-evaluate this floor, update the startup preflight and
 `docs/FUSE_REQUIREMENTS.md`, and add or update boundary tests. Do not silently

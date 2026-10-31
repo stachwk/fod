@@ -86,23 +86,21 @@ Reading guide:
   przeszedł na FOD 3.4.385 dnia 2026-10-31; artefakty:
   `artifacts/integration/unlink-primary-authority-20261030T232728Z/`.
 
-- [ ] **Minimalny Linux/libfuse FOD nie ma walidacji montowanego end-to-end.**
-  `rust_fuse/src/platform_requirements.rs` odrzuca Linux starszy niż 4.18.0 i
-  libfuse3 starsze niż 3.0.0; test jednostkowy sprawdza granice parsera i
-  walidatora. Najnowsze zapisane dowody mounted używają Linux 6.17/libfuse
-  3.17.4. Kontrola środowiska 2026-10-31 wykazała bieżący kernel
+- [ ] **Minimalna wersja libfuse3 nie ma walidacji montowanego end-to-end.**
+  `rust_fuse/src/platform_requirements.rs` wymaga teraz Linux 6.17.0 lub
+  nowszego oraz libfuse3 3.0.0 lub nowszego; test jednostkowy sprawdza
+  akceptację 6.17.0 i odrzucenie 6.16.99. Minimum jądra podniesiono do
+  najstarszej głównej wersji obecnej w zapisanych testach montowanych. Kontrola
+  środowiska 2026-10-31 wykazała bieżący kernel
   `6.17.0-41-generic`, libfuse 3.17.4 i dostępne `/dev/fuse`; zainstalowane
   moduły jąder zaczynają się od 5.8, obrazy `/boot/vmlinuz-*` są z 6.17,
   a `qemu-system-x86_64` nie jest dostępne.
-  Bieżący host nie pozwala więc uruchomić walidacji na Linux 4.18. Nie wykazano
-  błędu działania na minimum, ale też nie potwierdzono pełnego zestawu
-  minimalnych ABI/protokołu na tej parze. Wpływ: próg runtime
-  jest zadeklarowany i fail-closed, lecz nie jest jeszcze macierzą wspieranych,
-  end-to-end przetestowanych hostów. Następny krok: uruchomić reprezentatywny
-  mount/regression gate na Linux 4.18 i libfuse3 3.0 w zgodnym środowisku albo
-  podnieść minimum do najstarszej pary faktycznie zweryfikowanej; potem
-  zaktualizować [wymagania FUSE](docs/FUSE_REQUIREMENTS.md) i
-  [kontrakty kompatybilności](docs/compatibility-contracts.md).
+  Potwierdzony stos używa libfuse3 3.17.4, więc nie zweryfikowano jeszcze
+  minimalnego libfuse3 3.0.0 ani pełnej kombinacji minimalnych wersji. Wpływ:
+  próg runtime pozostaje egzekwowany i fail-closed, ale nie stanowi macierzy
+  wszystkich wspieranych hostów. Następny krok: uruchomić reprezentatywny
+  mount/regression gate na Linux 6.17/libfuse3 3.0 albo podnieść minimum
+  libfuse3 do najstarszej wersji faktycznie zweryfikowanej.
 
 - [x] **Zapis i skracanie pliku respektują `RLIMIT_FSIZE` na mountcie FUSE.**
   `test_lseek.py` ustawia w osobnym procesie limit 4096 bajtów, żąda zapisu

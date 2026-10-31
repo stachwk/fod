@@ -88,7 +88,7 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
     for field in [
         "FOD host requirements:",
         "linux_kernel=",
-        "minimum_linux_kernel=4.18.0",
+        "minimum_linux_kernel=6.17.0",
         "libfuse=",
         "minimum_libfuse=3.0.0",
     ] {

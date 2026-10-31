@@ -32,7 +32,7 @@ protokołu FUSE ani zgodności FOD z całym POSIX.
 | Obszar | Etap | Co potwierdzono | Co pozostało |
 | --- | --- | --- | --- |
 | POSIX.1-2024 | Audyt wymagań w toku; brak ogólnej deklaracji zgodności | Dwie grupy przypadków `lseek()` mają status Pass: zwykłe pozycjonowanie oraz `SEEK_DATA`/`SEEK_HOLE`. | 12 obszarów P01–P12 pozostaje Pending, ponieważ ich pełny zakres wymagań, błędów lub dowodów nie został zamknięty. Szczegóły i kryteria zamknięcia są w [audycie POSIX](POSIX_CONFORMANCE_AUDIT.md). |
-| Linux kernel/VFS | Wybrane zachowania przejrzane i sprawdzone, bez ogólnej deklaracji zgodności | Testy montowane i przegląd źródeł Linux v6.17 obejmują m.in. rozwiązywanie ścieżek, errno, uprawnienia, deskryptory i operacje kończone w VFS przed callbackiem. | Linux 4.18 jest egzekwowanym minimum, ale brak testu całego mounta na tej wersji. Brak pełnej macierzy wersji/dystrybucji i przeglądu wszystkich zachowań jądra. |
+| Linux kernel/VFS | Wybrane zachowania przejrzane i sprawdzone, bez ogólnej deklaracji zgodności | Testy montowane i przegląd źródeł Linux v6.17 obejmują m.in. rozwiązywanie ścieżek, errno, uprawnienia, deskryptory i operacje kończone w VFS przed callbackiem. | Linux 6.17.0 jest egzekwowanym minimum i ma testy montowane na 6.17.0-41; brak pełnej macierzy wersji/dystrybucji i przeglądu wszystkich zachowań jądra. |
 | FUSE/libfuse | FOD używa `fuser 0.18.0` z backendem libfuse3; protokół i capability są negocjowane w runtime | Najnowsze zapisane testy montowane: Linux 6.17/libfuse3 3.17.4; wybrane callbacki, negocjacja i przerwania. | libfuse3 3.0.0 jest egzekwowanym minimum bez testu mounta na tej wersji. Część callbacków nie jest implementowana, a inne są tylko częściowo sprawdzone; szczegóły ma [przewodnik Linux/FUSE](FUSE_REQUIREMENTS.md). |
 
 `Pass` oznacza wyłącznie wskazaną grupę przypadków, a nie cały obszar POSIX.
@@ -107,10 +107,10 @@ POSIX behavior is documented as outside supported-platform coverage.
 - A writable mount requires the negotiated `FUSE_ATOMIC_O_TRUNC` capability;
   startup rejects the mount if Linux does not offer it. `FUSE_MAX_PAGES` affects
   request sizing but is not required for basic correctness.
-- The runtime preflight requires Linux 4.18.0 and libfuse3 3.0.0. These are
-  enforced minimums, not a claim that every supported kernel/libfuse pair has
-  passed mounted tests. The latest recorded mounted stack is Linux 6.17 with
-  libfuse 3.17.4.
+- The runtime preflight requires Linux 6.17.0 and libfuse3 3.0.0. The Linux
+  minimum has mounted evidence on 6.17.0-41 with libfuse 3.17.4; the minimum
+  libfuse version and every supported kernel/libfuse pair have not all passed
+  mounted tests.
 
 FUSE is the Linux kernel/userspace request protocol; libfuse is a userspace
 reference library and FOD uses the Rust `fuser` API over its libfuse3 backend.
@@ -212,7 +212,7 @@ handled by Linux VFS or a library fallback without invoking an FOD callback.
 | Boundary | Current contract |
 | --- | --- |
 | Filesystem API | POSIX.1-2024 audit open; no overall conformance claim |
-| Linux/FUSE | Linux >= 4.18.0 and libfuse3 >= 3.0.0 enforced; fuser 0.18.0, protocol negotiated at runtime, latest recorded mount validation Linux 6.17/libfuse3 3.17.4 |
+| Linux/FUSE | Linux >= 6.17.0 and libfuse3 >= 3.0.0 enforced; fuser 0.18.0, protocol negotiated at runtime, mount validation Linux 6.17.0-41/libfuse3 3.17.4 |
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; `libfod.so` is command-surface only; no supported hotpath C ABI |
