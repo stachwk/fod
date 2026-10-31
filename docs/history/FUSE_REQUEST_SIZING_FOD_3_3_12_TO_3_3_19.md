@@ -21,7 +21,12 @@ Dokument rozroznia:
 Wnioski w tym dokumencie sa oparte na pomiarach FOD 3.3.12/3.3.13 wykonanych
 25 sierpnia 2026 na Linuxie z `PAGE_SIZE=4096`.
 
-## 1. Wymagania podstawowe
+## 1. Wymagania podstawowe obowiązujące w FOD 3.3.12–3.3.19
+
+Poniższe wersje odzwierciedlają stan z okresu pomiarów w 2026-08 i nie są
+aktualnymi wymaganiami. Bieżący FOD wymaga Linux 6.17.0 lub nowszego; aktualny
+próg startowy oraz zakres jego walidacji opisuje
+[`FUSE_REQUIREMENTS.md`](../FUSE_REQUIREMENTS.md).
 
 Minimalny wspierany zestaw uruchomieniowy FOD to:
 

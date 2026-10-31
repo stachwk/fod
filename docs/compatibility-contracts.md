@@ -7,8 +7,8 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: commit `3f90c99` (`FOD 3.4.400`). This release raises
-the enforced Linux minimum to 6.17.0; it adds no POSIX conformance evidence.
+Reviewed source baseline: FOD 3.4.418. FOD 3.4.415 raised the enforced Linux
+minimum to 6.17.0; this release adds no POSIX conformance evidence.
 The POSIX audit remains open; the preceding copy-source fencing fix improves
 multi-host data correctness but does not close a POSIX audit area. The latest
 POSIX-specific mounted evidence remains the individually versioned cases

@@ -5,11 +5,11 @@
 //! File content generation belongs to content mutations, not metadata updates.
 
 use super::{
-    DbRepo, PGconn, exec_command_params, exec_params, fetch_first_row_texts,
-    parse_persisted_posix_mode,
+    exec_command_params, exec_params, fetch_first_row_texts, parse_persisted_posix_mode, DbRepo,
+    PGconn,
 };
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use std::ffi::CString;
 
 #[derive(Clone, Copy)]
@@ -64,40 +64,65 @@ fn acl_has_permissions(
     let mut has_named_entry = false;
     let mut matched_group = false;
     let mut group_permissions = 0u16;
+    let mut stage = 0u8;
+    let mut named_user_ids = Vec::new();
+    let mut named_group_ids = Vec::new();
     for entry in acl[4..].chunks_exact(8) {
         let tag = u16::from_le_bytes(entry[0..2].try_into().unwrap());
-        let permissions = u16::from_le_bytes(entry[2..4].try_into().unwrap()) & 0o7;
-        let id = i32::from_le_bytes(entry[4..8].try_into().unwrap());
+        let permissions = u16::from_le_bytes(entry[2..4].try_into().unwrap());
+        if permissions & !0o7 != 0 {
+            return Err("invalid POSIX ACL permission bits".to_string());
+        }
+        let id = u32::from_le_bytes(entry[4..8].try_into().unwrap());
         match tag {
-            0x0001 => user_obj = Some(permissions),
-            0x0002 if id >= 0 && id as u32 == actor_uid => {
-                has_named_entry = true;
-                named_user = Some(permissions);
+            0x0001 if stage == 0 => {
+                stage = 1;
+                user_obj = Some(permissions);
             }
-            0x0002 => has_named_entry = true,
-            0x0004 => {
+            0x0002 if stage == 1 && id != u32::MAX => {
+                if named_user_ids.contains(&id) {
+                    return Err("duplicate POSIX ACL named user".to_string());
+                }
+                named_user_ids.push(id);
+                has_named_entry = true;
+                if id == actor_uid {
+                    named_user = Some(permissions);
+                }
+            }
+            0x0004 if stage == 1 => {
+                stage = 2;
                 if actor_groups.contains(&owner_gid) {
                     matched_group = true;
                     group_permissions |= permissions;
                 }
                 group_obj = Some(permissions);
             }
-            0x0008 if id >= 0 && actor_groups.contains(&(id as u32)) => {
+            0x0008 if stage == 2 && id != u32::MAX => {
+                if named_group_ids.contains(&id) {
+                    return Err("duplicate POSIX ACL named group".to_string());
+                }
+                named_group_ids.push(id);
                 has_named_entry = true;
-                matched_group = true;
-                group_permissions |= permissions;
+                if actor_groups.contains(&id) {
+                    matched_group = true;
+                    group_permissions |= permissions;
+                }
             }
-            0x0008 => has_named_entry = true,
-            0x0010 => mask = Some(permissions),
-            0x0020 => other = Some(permissions),
+            0x0010 if stage == 2 => {
+                stage = 3;
+                mask = Some(permissions);
+            }
+            0x0020 if stage == 2 || stage == 3 => {
+                stage = 4;
+                other = Some(permissions);
+            }
             _ => return Err("invalid POSIX ACL entry".to_string()),
         }
     }
-    if user_obj.is_none()
-        || group_obj.is_none()
-        || other.is_none()
-        || (has_named_entry && mask.is_none())
-    {
+    if stage != 4 || user_obj.is_none() || group_obj.is_none() || other.is_none() {
+        return Err("incomplete POSIX ACL xattr".to_string());
+    }
+    if has_named_entry && mask.is_none() {
         return Err("incomplete POSIX ACL xattr".to_string());
     }
     if actor_uid == owner_uid {
@@ -115,6 +140,73 @@ fn acl_has_permissions(
         return Ok(permissions & mask.unwrap_or(0o7) & requested == requested);
     }
     Ok(other.unwrap_or(0) & requested == requested)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acl_has_permissions;
+
+    fn make_acl(entries: &[(u16, u16, u32)]) -> Vec<u8> {
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        for (tag, permissions, id) in entries {
+            acl.extend_from_slice(&tag.to_le_bytes());
+            acl.extend_from_slice(&permissions.to_le_bytes());
+            acl.extend_from_slice(&id.to_le_bytes());
+        }
+        acl
+    }
+
+    fn acl_with_named_user(user_entries: &[(u16, u32)]) -> Vec<u8> {
+        let mut entries = vec![(0x0001, 0o7, u32::MAX)];
+        entries.extend(
+            user_entries
+                .iter()
+                .map(|(permissions, id)| (0x0002, *permissions, *id)),
+        );
+        entries.extend([
+            (0x0004, 0o0, u32::MAX),
+            (0x0010, 0o7, u32::MAX),
+            (0x0020, 0o0, u32::MAX),
+        ]);
+        make_acl(&entries)
+    }
+
+    #[test]
+    fn acl_permissions_reject_invalid_permission_bits() {
+        let acl = make_acl(&[
+            (0x0001, 0o7, u32::MAX),
+            (0x0004, 0o0, u32::MAX),
+            (0x0020, 0o10, u32::MAX),
+        ]);
+        assert!(acl_has_permissions(&acl, 1000, &[], 2000, 3000, 0o4)
+            .unwrap_err()
+            .contains("permission bits"));
+    }
+
+    #[test]
+    fn acl_permissions_reject_duplicate_entries_but_allow_unsorted_ids() {
+        let duplicate = acl_with_named_user(&[(0o0, 4000), (0o7, 4000)]);
+        assert!(acl_has_permissions(&duplicate, 4000, &[], 2000, 3000, 0o4).is_err());
+
+        let unordered = acl_with_named_user(&[(0o0, 4001), (0o7, 4000)]);
+        assert_eq!(
+            acl_has_permissions(&unordered, 4000, &[], 2000, 3000, 0o4),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn acl_permissions_preserve_valid_named_user_and_full_u32_identity() {
+        let acl = acl_with_named_user(&[(0o4, 4_000_000_000)]);
+        assert_eq!(
+            acl_has_permissions(&acl, 4_000_000_000, &[], 2000, 3000, 0o4),
+            Ok(true)
+        );
+        assert_eq!(
+            acl_has_permissions(&acl, 4_000_000_000, &[], 2000, 3000, 0o2),
+            Ok(false)
+        );
+    }
 }
 
 fn acl_write_access(
