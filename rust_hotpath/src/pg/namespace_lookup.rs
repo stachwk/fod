@@ -6,10 +6,10 @@
 //! by the caller for mutation preconditions.
 
 use super::{
-    conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, fetch_single_optional_text, join_nul_text, parse_persisted_posix_mode,
-    result_error, DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
-    PreparedStatement, PGRES_TUPLES_OK,
+    conn_error, exec_params, exec_prepared_params, fetch_first_column_texts,
+    fetch_optional_single_row_texts, fetch_rows_text, fetch_single_optional_text, join_nul_text,
+    parse_persisted_posix_mode, result_error, DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields,
+    PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -224,11 +224,12 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&directory_id];
-            let row = fetch_first_row_texts(exec_params(conn, &sql, &params)?)?;
-            let parent_id = row
-                .first()
+            let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &params)?)?
                 .ok_or_else(|| format!("directory {directory_id:?} does not exist"))?;
-            parent_id
+            if row.len() != 1 {
+                return Err("invalid directory parent row".to_string());
+            }
+            row[0]
                 .trim()
                 .parse::<u64>()
                 .map_err(|err| format!("directory parent id is invalid: {err}"))
@@ -1039,15 +1040,15 @@ impl DbRepo {
                                 PQclear(res);
                                 Err(error)
                             } else {
-                                let row = fetch_first_row_texts(res)?;
-                                if row.is_empty() {
-                                    Ok(None)
-                                } else {
-                                    let mut output = Vec::new();
-                                    output.extend_from_slice(kind.as_bytes());
-                                    output.push(0);
-                                    output.extend_from_slice(&join_nul_text(&row));
-                                    Ok(Some(output))
+                                match fetch_optional_single_row_texts(res)? {
+                                    None => Ok(None),
+                                    Some(row) => {
+                                        let mut output = Vec::new();
+                                        output.extend_from_slice(kind.as_bytes());
+                                        output.push(0);
+                                        output.extend_from_slice(&join_nul_text(&row));
+                                        Ok(Some(output))
+                                    }
                                 }
                             }
                         }

@@ -118,6 +118,15 @@ connection setup, so this branch could not be reached through a valid runtime
 connection. Hashes now always use the supported atomic upsert, avoiding an
 extra schema lookup and a separate read/insert path.
 
+FOD 3.4.477 replaces permissive single-row PostgreSQL decoding with an
+optional-row decoder that rejects NULL fields, empty column sets and duplicate
+rows. The first-column decoder also checks that each returned value is
+non-NULL and that the query returns exactly one column. The regression
+`optional_row_decoder_rejects_null_and_multiple_rows` passed against the
+configured PostgreSQL 16.15 build after verifying `--with-blocksize=32` and
+`SHOW block_size=32768`. The generic multirow text decoder still represents
+NULL as an empty string and remains under audit.
+
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required
 `mkfs.fod upgrade` instruction instead of a secondary undefined-table SQL

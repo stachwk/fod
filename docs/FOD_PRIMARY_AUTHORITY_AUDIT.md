@@ -867,3 +867,19 @@ The mounted cross-host removal/replacement race has not yet been run. The
 client builder compiled the callback in `release-lto` against the repository's
 pinned libfuse 3.18.3. The local host reports libfuse 3.14.0, below FOD's
 minimum 3.18.2, so mounted race coverage still needs a capable test host.
+
+### Strict single-row PostgreSQL result decoding
+
+The former `fetch_first_row_texts()` helper could turn a SQL NULL into an empty
+string and silently ignore rows after the first. Replace it with
+`fetch_optional_single_row_texts()`: absence is represented explicitly, while
+NULL fields, zero-column results and duplicate rows are errors. All single-row
+callers now use the strict helper, including parent permission/ACL checks,
+file metadata, link counts, xattr authorization and unlink promotion. The
+first-column helper now requires exactly one result column and rejects NULL
+values; callers use it for directory entry names and orphan-purge file IDs.
+`optional_row_decoder_rejects_null_and_multiple_rows` checks valid and absent
+results plus NULL, duplicate-row, zero-column and invalid first-column shapes;
+it passed against PostgreSQL 16.15 with `--with-blocksize=32` and live
+`SHOW block_size=32768`. The general multirow `fetch_rows_text()` decoder still
+maps NULL fields to empty strings and needs a separate caller-by-caller audit.

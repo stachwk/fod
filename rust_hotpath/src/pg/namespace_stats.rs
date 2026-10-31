@@ -5,7 +5,7 @@
 //! Mutation callers remain responsible for validation in their authority transaction.
 
 use super::{
-    exec_params, exec_prepared_params, fetch_first_row_texts, fetch_single_text, DbRepo,
+    exec_params, exec_prepared_params, fetch_optional_single_row_texts, fetch_single_text, DbRepo,
     PreparedStatement, StatfsSnapshotRows,
 };
 use std::ffi::CString;
@@ -234,8 +234,9 @@ impl DbRepo {
     pub fn statfs_snapshot(&self) -> Result<StatfsSnapshotRows, String> {
         self.with_read_connection(|conn| unsafe {
             let res = exec_prepared_params(conn, PreparedStatement::StatfsSnapshot, &[])?;
-            let values = fetch_first_row_texts(res)?;
-            if values.len() < 6 {
+            let values = fetch_optional_single_row_texts(res)?
+                .ok_or_else(|| "statfs snapshot returned no rows".to_string())?;
+            if values.len() != 6 {
                 return Err("invalid statfs snapshot".to_string());
             }
             let files = values[0]

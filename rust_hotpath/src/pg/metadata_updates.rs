@@ -5,8 +5,8 @@
 //! File content generation belongs to content mutations, not metadata updates.
 
 use super::{
-    exec_command_params, exec_params, fetch_first_row_texts, parse_persisted_posix_mode, DbRepo,
-    PGconn,
+    exec_command_params, exec_params, fetch_optional_single_row_texts, parse_persisted_posix_mode,
+    DbRepo, PGconn,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -250,7 +250,7 @@ pub(super) unsafe fn inode_acl_allows_on_conn(
     owner_gid: u32,
     requested: u16,
 ) -> Result<Option<bool>, String> {
-    let rows = fetch_first_row_texts(exec_params(
+    let rows = fetch_optional_single_row_texts(exec_params(
         conn,
         &CString::new(
             "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind=$1 AND owner_id=$2 AND name='system.posix_acl_access'",
@@ -261,11 +261,14 @@ pub(super) unsafe fn inode_acl_allows_on_conn(
             &CString::new(inode_id.to_string()).unwrap(),
         ],
     )?)?;
-    let Some(encoded) = rows.first() else {
+    let Some(rows) = rows else {
         return Ok(None);
     };
+    if rows.len() != 1 {
+        return Err("invalid POSIX ACL result row".to_string());
+    }
     let acl = BASE64_STANDARD
-        .decode(encoded.trim())
+        .decode(rows[0].trim())
         .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
     acl_has_permissions(
         &acl,
@@ -292,13 +295,14 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
     file_id: u64,
     authorization: &FileWriteAuthorization,
 ) -> Result<(), String> {
-    let rows = fetch_first_row_texts(exec_params(
+    let rows = fetch_optional_single_row_texts(exec_params(
         conn,
         &CString::new("SELECT uid, gid, mode, inode_seed FROM files WHERE id_file = $1 FOR UPDATE")
             .unwrap(),
         &[&CString::new(file_id.to_string()).unwrap()],
-    )?)?;
-    if rows.len() < 4 || rows[3] != authorization.expected_inode_seed {
+    )?)?
+    .ok_or_else(|| "FOD_TRUNCATE_TARGET_MISSING".to_string())?;
+    if rows.len() != 4 || rows[3] != authorization.expected_inode_seed {
         return Err("FOD_TRUNCATE_TARGET_MISSING".to_string());
     }
     let owner_uid = rows[0].parse::<u32>().map_err(|err| err.to_string())?;
@@ -307,8 +311,8 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
         return Ok(());
     }
     let mode = parse_persisted_posix_mode(&rows[2])?;
-    let acl_rows = if authorization.use_posix_acl {
-        fetch_first_row_texts(exec_params(
+    let acl_value = if authorization.use_posix_acl {
+        fetch_optional_single_row_texts(exec_params(
             conn,
             &CString::new(
                 "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='system.posix_acl_access'",
@@ -316,10 +320,17 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
             .unwrap(),
             &[&CString::new(file_id.to_string()).unwrap()],
         )?)?
+            .map(|row| {
+                if row.len() != 1 {
+                    return Err("invalid file access ACL result row".to_string());
+                }
+                Ok(row[0].clone())
+            })
+            .transpose()?
     } else {
-        Vec::new()
+        None
     };
-    let has_write = if let Some(encoded) = acl_rows.first() {
+    let has_write = if let Some(encoded) = acl_value {
         let acl = BASE64_STANDARD
             .decode(encoded.trim())
             .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
@@ -550,13 +561,15 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let select_mode = CString::new("SELECT mode FROM files WHERE id_file=$1 FOR UPDATE")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let Some(row) = fetch_first_row_texts(exec_params(conn, &select_mode, &[&file_id])?)?
-            .first()
-            .cloned()
+        let Some(row) =
+            fetch_optional_single_row_texts(exec_params(conn, &select_mode, &[&file_id])?)?
         else {
             return Err("file missing while clearing privilege metadata".to_string());
         };
-        let current_mode = parse_persisted_posix_mode(&row)?;
+        if row.len() != 1 {
+            return Err("invalid file mode row while clearing privilege metadata".to_string());
+        }
+        let current_mode = parse_persisted_posix_mode(&row[0])?;
         let mut mode = current_mode & !0o4000;
         if current_mode & 0o2010 == 0o2010 {
             mode &= !0o2000;

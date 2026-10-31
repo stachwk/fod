@@ -918,16 +918,20 @@ Reading guide:
   fod-rust-hotpath -- --test-threads=1` passed against a newly initialized
   disposable PostgreSQL 16.15 database; the custom build configuration and
   live `SHOW block_size=32768` were checked, and the database was dropped.
-  Source review found a remaining decoder-contract question: the generic
-  `fetch_first_row_texts()`, `fetch_rows_text()` and
-  `fetch_first_column_texts()` helpers convert SQL `NULL` fields to empty
-  strings, while `fetch_first_row_texts()` also discards rows after the first.
-  Several consumers validate those values or query primary-key-backed rows,
-  and some fields are intentionally nullable, so this alone does not establish
-  a filesystem defect. Audit the remaining callers, distinguish legitimate
-  nullability from malformed results, and add targeted fault-injection
-  regressions before tightening the shared helpers. No runtime misbehavior has
-  been reproduced for this finding.
+  FOD 3.4.477 removes `fetch_first_row_texts()` and migrates its call sites to
+  `fetch_optional_single_row_texts()`, which distinguishes no row from
+  malformed shape and rejects NULL fields, zero-column results and multiple
+  rows. `fetch_first_column_texts()` now requires exactly one column and
+  rejects NULL values. The
+  `optional_row_decoder_rejects_null_and_multiple_rows` unit regression covers
+  valid/absent rows, NULL, extra rows, zero columns, valid multirow
+  single-column results and malformed first-column results; it passed against
+  the verified PostgreSQL 16.15 `BLCKSZ=32KiB` endpoint. The generic multirow
+  `fetch_rows_text()` still serializes SQL NULL as empty text; audit its
+  remaining consumers and explicit nullable-field contracts before deciding
+  whether to replace that behavior. This closes the single-row and
+  first-column decoder question, not the broader PostgreSQL fault-injection
+  work.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

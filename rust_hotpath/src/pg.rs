@@ -2910,28 +2910,42 @@ unsafe fn fetch_single_text_option(res: *mut PGresult) -> Result<Option<String>,
     }
 }
 
-unsafe fn fetch_first_row_texts(res: *mut PGresult) -> Result<Vec<String>, String> {
-    let result = match PQresultStatus(res) {
+unsafe fn fetch_optional_single_row_texts(
+    res: *mut PGresult,
+) -> Result<Option<Vec<String>>, String> {
+    let result = (|| match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows < 1 || cols < 1 {
-                Ok(Vec::new())
+            if cols < 1 {
+                Err("invalid PostgreSQL row result: expected at least 1 column".to_string())
+            } else if rows == 0 {
+                Ok(None)
+            } else if rows != 1 {
+                Err(format!(
+                    "invalid PostgreSQL row result: expected at most 1 row, got {rows}"
+                ))
             } else {
                 let mut values = Vec::with_capacity(cols as usize);
                 for col in 0..cols {
+                    if PQgetisnull(res, 0, col) != 0 {
+                        return Err(format!(
+                            "PostgreSQL row result contains NULL in column {col}"
+                        ));
+                    }
                     let value_ptr = PQgetvalue(res, 0, col);
                     if value_ptr.is_null() {
-                        values.push(String::new());
-                    } else {
-                        values.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
+                        return Err(format!(
+                            "PostgreSQL row result has a null value pointer in column {col}"
+                        ));
                     }
+                    values.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
                 }
-                Ok(values)
+                Ok(Some(values))
             }
         }
         _ => Err(result_error(res)),
-    };
+    })();
     PQclear(res);
     result
 }
@@ -2970,24 +2984,34 @@ unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, St
     let result = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
-            if rows < 1 {
-                Ok(Vec::new())
+            let cols = PQnfields(res);
+            if cols != 1 {
+                Err(format!(
+                    "invalid PostgreSQL column result: expected 1 column, got {cols}"
+                ))
             } else {
-                let cols = PQnfields(res);
-                if cols < 1 {
-                    Ok(Vec::new())
-                } else {
-                    let mut values = Vec::with_capacity(rows as usize);
-                    for row in 0..rows {
-                        let value_ptr = PQgetvalue(res, row, 0);
-                        if value_ptr.is_null() {
-                            values.push(String::new());
-                        } else {
-                            values.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
-                        }
+                let mut values = Vec::with_capacity(rows as usize);
+                for row in 0..rows {
+                    if PQgetisnull(res, row, 0) != 0 {
+                        return {
+                            PQclear(res);
+                            Err(format!(
+                                "PostgreSQL column result contains NULL in row {row}"
+                            ))
+                        };
                     }
-                    Ok(values)
+                    let value_ptr = PQgetvalue(res, row, 0);
+                    if value_ptr.is_null() {
+                        return {
+                            PQclear(res);
+                            Err(format!(
+                                "PostgreSQL column result has a null value pointer in row {row}"
+                            ))
+                        };
+                    }
+                    values.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
                 }
+                Ok(values)
             }
         }
         _ => Err(result_error(res)),
@@ -6131,11 +6155,12 @@ impl DbRepo {
             CString::new("SELECT uid, mode FROM directories WHERE id_directory = $1 FOR SHARE")
                 .unwrap();
         let parent = CString::new(parent_id.to_string()).unwrap();
-        let row = fetch_first_row_texts(exec_params(conn, &sql, &[&parent])?)?;
+        let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &[&parent])?)?
+            .ok_or_else(|| {
+                format!("{NAMESPACE_PARENT_MISSING_PREFIX} sticky parent disappeared")
+            })?;
         if row.len() != 2 {
-            return Err(format!(
-                "{NAMESPACE_PARENT_MISSING_PREFIX} sticky parent disappeared"
-            ));
+            return Err("invalid sticky parent metadata row".to_string());
         }
         let parent_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
         let mode = parse_persisted_posix_mode(&row[1])?;
@@ -6184,11 +6209,12 @@ impl DbRepo {
         )
         .unwrap();
         let parent = CString::new(parent_id.to_string()).unwrap();
-        let row = fetch_first_row_texts(exec_params(conn, &sql, &[&parent])?)?;
+        let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &[&parent])?)?
+            .ok_or_else(|| {
+                format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared")
+            })?;
         if row.len() != 3 {
-            return Err(format!(
-                "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"
-            ));
+            return Err("invalid parent directory metadata row".to_string());
         }
         let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
         let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
@@ -6235,11 +6261,12 @@ impl DbRepo {
             )
         };
         let param_refs = params.iter().collect::<Vec<_>>();
-        let row = fetch_first_row_texts(exec_params(conn, &sql, &param_refs)?)?;
+        let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &param_refs)?)?
+            .ok_or_else(|| {
+                format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared")
+            })?;
         if row.len() != 2 {
-            return Err(format!(
-                "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"
-            ));
+            return Err("invalid parent setgid metadata row".to_string());
         }
         let parent_gid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
         let parent_mode = parse_persisted_posix_mode(&row[1])?;
@@ -6286,11 +6313,12 @@ impl DbRepo {
             )
         };
         let param_refs = params.iter().collect::<Vec<_>>();
-        let rows = fetch_first_row_texts(exec_params(conn, &sql, &param_refs)?)?;
+        let rows = fetch_optional_single_row_texts(exec_params(conn, &sql, &param_refs)?)?
+            .ok_or_else(|| {
+                format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared")
+            })?;
         if rows.len() != 4 {
-            return Err(format!(
-                "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"
-            ));
+            return Err("invalid parent ACL metadata row".to_string());
         }
         let directory_id = rows[0].parse::<u64>().map_err(|err| err.to_string())?;
         let owner_uid = rows[1].parse::<u32>().map_err(|err| err.to_string())?;
@@ -6577,10 +6605,9 @@ impl DbRepo {
         unsafe {
             let params = [&file_id];
             let res = exec_prepared_params(conn, PreparedStatement::FileDataObjectInfo, &params)?;
-            let values = fetch_first_row_texts(res)?;
-            if values.is_empty() {
+            let Some(values) = fetch_optional_single_row_texts(res)? else {
                 return Ok(None);
-            }
+            };
             if values.len() != 2 {
                 return Err(format!(
                     "invalid file data-object info row: expected 2 columns, got {}",
@@ -8594,10 +8621,11 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
-            let row = fetch_first_row_texts(res)?;
-            if row.is_empty() {
+            let Some(row) = fetch_optional_single_row_texts(res)
+                .map_err(|error| format!("invalid file unlinked/link-count row: {error}"))?
+            else {
                 return Ok(None);
-            }
+            };
             if row.len() != 2 {
                 return Err(format!(
                     "invalid file link-count row: expected 2 columns, got {}",
@@ -8628,14 +8656,10 @@ impl DbRepo {
                 return Err(conn_error(conn));
             }
             match PQresultStatus(res) {
-                PGRES_TUPLES_OK => {
-                    let row = fetch_first_row_texts(res)?;
-                    if row.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(join_nul_text(&row)))
-                    }
-                }
+                PGRES_TUPLES_OK => match fetch_optional_single_row_texts(res)? {
+                    None => Ok(None),
+                    Some(row) => Ok(Some(join_nul_text(&row))),
+                },
                 _ => {
                     let err = result_error(res);
                     PQclear(res);
@@ -10815,7 +10839,8 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id_param = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
-        let state = fetch_first_row_texts(exec_params(conn, &sql, &[&file_id_param])?)?;
+        let state = fetch_optional_single_row_texts(exec_params(conn, &sql, &[&file_id_param])?)?
+            .ok_or_else(|| "file purge state query returned no rows".to_string())?;
         if state.len() != 2 {
             return Err("file purge state returned incomplete row".to_string());
         }
@@ -10877,7 +10902,7 @@ impl DbRepo {
         let chosen = {
             let params = [&file_id_param];
             let res = exec_params(conn, &sql_choose, &params)?;
-            fetch_first_row_texts(res)?
+            fetch_optional_single_row_texts(res)?.unwrap_or_default()
         };
 
         if !chosen.is_empty() {
@@ -11807,8 +11832,8 @@ impl DbRepo {
         )
         .unwrap();
         let delete = CString::new("DELETE FROM symlinks WHERE id_symlink=$1").unwrap();
-        let rows = fetch_rows_text(exec_params(conn, &aliases, &[&id])?)?;
-        let Some(alias) = rows.first() else {
+        let Some(alias) = fetch_optional_single_row_texts(exec_params(conn, &aliases, &[&id])?)?
+        else {
             return exec_command_params(conn, &delete, &[&id]);
         };
         if alias.len() != 3 {
@@ -15671,6 +15696,84 @@ mod tests {
                 }
                 if query_required("SELECT 'value'::text WHERE FALSE").is_ok() {
                     return Err("required scalar decoder accepted an empty result".to_string());
+                }
+                Ok(())
+            })();
+            PQfinish(conn);
+            result
+        };
+
+        checks
+    }
+
+    #[test]
+    fn optional_row_decoder_rejects_null_and_multiple_rows() -> Result<(), String> {
+        let conninfo = CString::new(conninfo())
+            .map_err(|_| "test PostgreSQL connection string contains NUL".to_string())?;
+        let conn = unsafe { PQconnectdb(conninfo.as_ptr()) };
+        if conn.is_null() {
+            return Err("libpq returned a null test connection".to_string());
+        }
+        if unsafe { PQstatus(conn) } != CONNECTION_OK {
+            let error = conn_error(conn);
+            unsafe { PQfinish(conn) };
+            return Err(error);
+        }
+
+        let checks = unsafe {
+            let query_row = |sql: &str| -> Result<Option<Vec<String>>, String> {
+                let sql = CString::new(sql).map_err(|_| "test row SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_optional_single_row_texts(res)
+            };
+            let query_column = |sql: &str| -> Result<Vec<String>, String> {
+                let sql =
+                    CString::new(sql).map_err(|_| "test column SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_first_column_texts(res)
+            };
+
+            let result = (|| {
+                if query_row("SELECT 'first'::text, 'second'::text")?
+                    != Some(vec!["first".to_string(), "second".to_string()])
+                {
+                    return Err("optional row decoder changed a valid row".to_string());
+                }
+                if query_row("SELECT 'value'::text WHERE FALSE")?.is_some() {
+                    return Err("optional row decoder did not preserve no-row state".to_string());
+                }
+                for sql in [
+                    "SELECT NULL::text",
+                    "SELECT 'first'::text UNION ALL SELECT 'second'::text",
+                    "SELECT FROM pg_catalog.pg_class WHERE FALSE",
+                ] {
+                    if query_row(sql).is_ok() {
+                        return Err(format!(
+                            "optional row decoder accepted malformed result: {sql}"
+                        ));
+                    }
+                }
+                if query_column("SELECT name FROM (VALUES ('one'), ('two')) AS names(name)")?
+                    != vec!["one".to_string(), "two".to_string()]
+                {
+                    return Err("first-column decoder changed valid rows".to_string());
+                }
+                for sql in [
+                    "SELECT NULL::text",
+                    "SELECT 'value'::text, 'extra'::text",
+                    "SELECT FROM pg_catalog.pg_class WHERE FALSE",
+                ] {
+                    if query_column(sql).is_ok() {
+                        return Err(format!(
+                            "first-column decoder accepted malformed result: {sql}"
+                        ));
+                    }
                 }
                 Ok(())
             })();

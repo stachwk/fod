@@ -22,6 +22,12 @@ schema-38 regression passed with verified PostgreSQL 16.15 `BLCKSZ=32KiB`.
 The mounted two-host race remains open because the local host has libfuse 3.14.0;
 see the authority audit and `TODO.md`.
 
+FOD 3.4.477 hardens PostgreSQL single-row and first-column result decoding:
+missing rows are distinct from malformed shapes, NULL fields fail closed, and
+unexpected multiple rows are rejected. The focused decoder regression passed
+on the verified PostgreSQL 16.15 `BLCKSZ=32KiB` runtime. Continue the broader
+database fault-injection audit, including NULL handling in multirow results.
+
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both
 stacks were run successfully on 2026-10-31. The explicit 8 KiB variant remains
