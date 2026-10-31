@@ -2417,3 +2417,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   local libfuse3 is 3.14.0, below the project's 3.18.2 minimum. Live PostgreSQL
   integration is also unverified because the local server/build and schema do
   not meet the FOD integration requirements.
+
+## FOD 3.4.493 — validate copy metadata and expired-session results
+
+- [x] Require exactly two columns from the file-copy metadata query and decode
+  every returned session ID from expired-session pruning through the existing
+  one-column non-NULL validator. The row-decoder regression passed against the
+  configured PostgreSQL 16.15 FOD container after verifying its
+  `--with-blocksize=32` configure flag and runtime `SHOW block_size=32768`.
+  `cargo check`, formatting and version checks also pass. This pure decoder
+  query does not mutate the shared schema-31 database; operation-level tests
+  for copy and expired-session pruning remain pending.

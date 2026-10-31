@@ -8982,15 +8982,7 @@ impl DbRepo {
             transactional_replayable(conn, |conn| {
                 let empty_params: [&CString; 0] = [];
                 let res = exec_params(conn, &delete_sql, &empty_params)?;
-                let expired = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => PQntuples(res) > 0,
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        return Err(error);
-                    }
-                };
-                PQclear(res);
+                let expired = !fetch_first_column_texts(res)?.is_empty();
                 exec_command(conn, &cleanup_zero_session_sql)?;
                 Ok(expired)
             })
@@ -15025,9 +15017,13 @@ impl DbRepo {
                         PGRES_TUPLES_OK => {
                             let rows = PQntuples(res);
                             let cols = PQnfields(res);
+                            if cols != 2 {
+                                PQclear(res);
+                                return Err("invalid file info row returned by PostgreSQL".into());
+                            }
                             let value = if rows == 0 {
                                 None
-                            } else if rows != 1 || cols < 2 {
+                            } else if rows != 1 {
                                 PQclear(res);
                                 return Err("invalid file info row returned by PostgreSQL".into());
                             } else if PQgetisnull(res, 0, 0) != 0 || PQgetisnull(res, 0, 1) != 0 {
@@ -15782,6 +15778,18 @@ mod tests {
                 }
                 fetch_single_positive_id(res, "test namespace insert")
             };
+            let query_hardlink_row =
+                |sql: &str| -> Result<Option<(u64, Option<u64>, String)>, String> {
+                    let sql = CString::new(sql)
+                        .map_err(|_| "test hardlink SQL contains NUL".to_string())?;
+                    let res = PQexec(conn, sql.as_ptr());
+                    if res.is_null() {
+                        return Err(conn_error(conn));
+                    }
+                    let row = decode_primary_hardlink_row(res, 0);
+                    PQclear(res);
+                    row
+                };
 
             let result = (|| {
                 if query_row("SELECT 'first'::text, 'second'::text")?
@@ -15900,6 +15908,16 @@ mod tests {
                     if query_rows(sql).is_ok() {
                         return Err(format!("multirow decoder accepted malformed result: {sql}"));
                     }
+                }
+                if query_hardlink_row("SELECT '42'::text, NULL::text, 'name'::text")?
+                    != Some((42, None, "name".to_string()))
+                {
+                    return Err("hardlink row decoder changed a valid row".to_string());
+                }
+                if query_hardlink_row("SELECT '42'::text, NULL::text, 'name'::text, 'extra'::text")
+                    .is_ok()
+                {
+                    return Err("hardlink row decoder accepted an extra column".to_string());
                 }
                 Ok(())
             })();

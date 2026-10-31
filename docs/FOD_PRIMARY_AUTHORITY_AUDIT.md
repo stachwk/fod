@@ -975,3 +975,13 @@ three projected columns, and requires endpoint-role probes to return exactly
 one row and one column. The endpoint result-shape regression was added, but
 the FUSE crate test could not compile here: installed libfuse3 is 3.14.0 while
 the project requires at least 3.18.2. No live PostgreSQL integration was run.
+FOD 3.4.493 requires the file-copy metadata query to return exactly its two
+projected columns. Expired-session pruning now decodes `DELETE ... RETURNING`
+through the exact one-column, non-NULL row decoder instead of checking only
+whether the result contained rows. The PostgreSQL row-decoder regression,
+extended to require exactly three hardlink-result columns, passed against the
+configured PostgreSQL 16.15 FOD container after confirming
+`pg_config --configure` includes `--with-blocksize=32` and runtime
+`SHOW block_size=32768`. That test uses SELECT-only decoder fixtures and does
+not change the shared schema-31 database. Operation-level PostgreSQL tests for
+copy metadata and expired-session pruning remain pending.
