@@ -2689,8 +2689,7 @@ impl FodFuse {
         }
     }
 
-    fn join_path(parent: &str, name: &OsStr) -> String {
-        let name = name.to_string_lossy();
+    fn join_path(parent: &str, name: &str) -> String {
         if parent == "/" {
             format!("/{}", name)
         } else {
@@ -2698,16 +2697,15 @@ impl FodFuse {
         }
     }
 
-    fn validate_component_name(name: &OsStr) -> Result<(), libc::c_int> {
+    fn validate_component_name(name: &OsStr) -> Result<&str, libc::c_int> {
         const NAME_MAX: usize = 255;
         if name.as_bytes().len() > NAME_MAX {
             Err(ENAMETOOLONG)
-        } else if Self::os_str_as_utf8(name).is_err() {
-            // PostgreSQL text cannot preserve invalid UTF-8 path bytes. Reject
-            // them before any lossy conversion could alias another name.
-            Err(EILSEQ)
         } else {
-            Ok(())
+            // PostgreSQL text cannot preserve invalid UTF-8 path bytes. Return
+            // the validated text so later path construction cannot silently
+            // alias another name through a lossy conversion.
+            Self::os_str_as_utf8(name)
         }
     }
 
@@ -2854,12 +2852,12 @@ impl FodFuse {
         }
     }
 
-    fn decode_nul_fields(blob: &[u8]) -> Vec<String> {
+    fn decode_nul_fields(blob: &[u8]) -> Result<Vec<String>, libc::c_int> {
         if blob.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         blob.split(|b| *b == 0)
-            .map(|part| String::from_utf8_lossy(part).to_string())
+            .map(|part| String::from_utf8(part.to_vec()).map_err(|_| EIO))
             .collect()
     }
 
@@ -3955,7 +3953,7 @@ impl FodFuse {
         blob: &[u8],
         is_root: bool,
     ) -> Result<Option<ParsedAttrs>, libc::c_int> {
-        let fields = Self::decode_nul_fields(&blob);
+        let fields = Self::decode_nul_fields(&blob)?;
         if fields.is_empty() {
             return Ok(None);
         }
@@ -4098,7 +4096,7 @@ impl FodFuse {
         let Some(blob) = blob else {
             return Ok(None);
         };
-        let fields = Self::decode_nul_fields(&blob);
+        let fields = Self::decode_nul_fields(&blob)?;
         if fields.len() < 10 {
             return Err(EIO);
         }
@@ -4845,18 +4843,19 @@ impl FodFuse {
         let path = Path::new(&normalized);
         let name = path
             .file_name()
-            .map(|value| value.to_string_lossy().into_owned())
+            .and_then(OsStr::to_str)
+            .map(str::to_owned)
             .filter(|value| !value.is_empty())
-            .ok_or(EIO)?;
+            .ok_or(EILSEQ)?;
         let parent = path.parent().unwrap_or_else(|| Path::new("/"));
-        let parent_text = parent.to_string_lossy();
+        let parent_text = parent.to_str().ok_or(EILSEQ)?;
         let parent_id = if parent_text.is_empty() || parent_text == "/" {
             None
         } else {
             let resolved = self
                 .repo
                 .authoritative_view()
-                .resolve_path(parent_text.as_ref())
+                .resolve_path(parent_text)
                 .map_err(|err| {
                     warn!(
                         "FOD write ownership parent resolution failed path={} parent={} err={}",
@@ -5757,7 +5756,7 @@ impl FodFuse {
         self.mark_unlink_destination_released(file_id, parent_id, old_name);
         self.remove_cached_path(old_path);
         if outcome == FileUnlinkOutcome::Deferred {
-            let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
+            let hidden_path = Self::join_path(parent_path, &hidden_name);
             if let Ok(mut guard) = self.fh_table.lock() {
                 for state in guard.values_mut() {
                     if state.file_id == Some(file_id) && state.path == old_path {
@@ -5962,7 +5961,10 @@ impl FodFuse {
             return Ok(());
         };
         let host_name = client_session_hostname(std::env::var("HOSTNAME").ok(), current_hostname());
-        let mountpoint = mountpoint.to_string_lossy().to_string();
+        let mountpoint = mountpoint
+            .to_str()
+            .ok_or_else(|| "FOD mountpoint is not valid UTF-8".to_string())?
+            .to_owned();
         let pid = u64::from(std::process::id());
         let session_id = repo.register_client_session(
             &host_name,
@@ -6151,10 +6153,13 @@ impl Filesystem for FodFuse {
     fn lookup(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let parent = parent.0;
         let req_id = self.next_request_id();
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -6162,7 +6167,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "lookup",
                     errno,
-                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                    format!("parent={} name={}", parent, name),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -6226,16 +6231,12 @@ impl Filesystem for FodFuse {
             "lookup",
             format!("parent={} child={}", parent_path, child_path),
         );
-        let entry = match authority
-            .directory_entry_metadata_for_id_and_name(parent_id, &name.to_string_lossy())
-        {
+        let entry = match authority.directory_entry_metadata_for_id_and_name(parent_id, name) {
             Ok(entry) => entry,
             Err(err) => {
                 warn!(
                     "FOD lookup by parent ID failed parent_id={:?} name={} err={}",
-                    parent_id,
-                    name.to_string_lossy(),
-                    err
+                    parent_id, name, err
                 );
                 fuse_reply_error!(reply, EIO);
                 return;
@@ -6443,7 +6444,13 @@ impl Filesystem for FodFuse {
             }
         } else {
             match self.repo.list_directory_entries_blob_for_id(directory_id) {
-                Ok(Some(blob)) => DirectoryEntrySnapshot::Names(Self::decode_nul_fields(&blob)),
+                Ok(Some(blob)) => match Self::decode_nul_fields(&blob) {
+                    Ok(names) => DirectoryEntrySnapshot::Names(names),
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                },
                 Ok(None) => DirectoryEntrySnapshot::Names(Vec::new()),
                 Err(err) => {
                     warn!("FOD opendir name snapshot failed path={} err={}", path, err);
@@ -6576,9 +6583,13 @@ impl Filesystem for FodFuse {
                         .repo
                         .list_directory_entries_blob_for_id(state.directory_id)
                     {
-                        Ok(Some(blob)) => {
-                            DirectoryEntrySnapshot::Names(Self::decode_nul_fields(&blob))
-                        }
+                        Ok(Some(blob)) => match Self::decode_nul_fields(&blob) {
+                            Ok(names) => DirectoryEntrySnapshot::Names(names),
+                            Err(errno) => {
+                                fuse_reply_error!(reply, errno);
+                                return;
+                            }
+                        },
                         Ok(None) => DirectoryEntrySnapshot::Names(Vec::new()),
                         Err(err) => {
                             warn!(
@@ -6645,8 +6656,7 @@ impl Filesystem for FodFuse {
                             }
                         };
                     if fod_fuse_readdir_register_paths_enabled() {
-                        let child_path =
-                            Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                        let child_path = Self::join_path(&path, &entry.name);
                         self.register_path(&child_path, inode);
                     }
                     emitted = emitted.saturating_add(1);
@@ -6699,8 +6709,7 @@ impl Filesystem for FodFuse {
                             }
                         };
                     if fod_fuse_readdir_register_paths_enabled() {
-                        let child_path =
-                            Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                        let child_path = Self::join_path(&path, &entry.name);
                         self.register_path(&child_path, inode);
                     }
                     emitted = emitted.saturating_add(1);
@@ -8943,10 +8952,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -8954,7 +8966,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "mkdir",
                     errno,
-                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                    format!("parent={} name={}", parent, name),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -8984,7 +8996,7 @@ impl Filesystem for FodFuse {
                 parent_path, child_path, mode, subject.uid, subject.gid
             ),
         );
-        let target_name = name.to_string_lossy();
+        let target_name = name;
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
         // A path-derived seed would give a remove/recreate at the same name
         // the same FUSE inode. Pair the mount's PostgreSQL-assigned session ID
@@ -9074,10 +9086,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -9085,7 +9100,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "unlink",
                     errno,
-                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                    format!("parent={} name={}", parent, name),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -9155,7 +9170,7 @@ impl Filesystem for FodFuse {
                     parent_id,
                     &parent_path,
                     &child_path,
-                    name.to_string_lossy().as_ref(),
+                    name,
                     req_id,
                     &subject,
                 ) {
@@ -9172,7 +9187,7 @@ impl Filesystem for FodFuse {
                 Some(symlink_id) => self.repo.unlink_symlink_entry_for_subject_acl(
                     symlink_id,
                     parent_id,
-                    name.to_string_lossy().as_ref(),
+                    name,
                     subject.uid,
                     subject.gid,
                     &subject.groups.iter().copied().collect::<Vec<_>>(),
@@ -9184,7 +9199,7 @@ impl Filesystem for FodFuse {
                 Some(alias_id) => self.repo.unlink_symlink_hardlink_entry_for_subject_acl(
                     alias_id,
                     parent_id,
-                    name.to_string_lossy().as_ref(),
+                    name,
                     subject.uid,
                     subject.gid,
                     &subject.groups.iter().copied().collect::<Vec<_>>(),
@@ -9253,10 +9268,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -9264,7 +9282,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "rmdir",
                     errno,
-                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                    format!("parent={} name={}", parent, name),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -9310,7 +9328,7 @@ impl Filesystem for FodFuse {
         match self.repo.unlink_directory_entry_for_subject_acl(
             directory_id,
             resolved.parent_id,
-            name.to_string_lossy().as_ref(),
+            name,
             subject.uid,
             subject.gid,
             &subject.groups.iter().copied().collect::<Vec<_>>(),
@@ -9368,14 +9386,20 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
-        if let Err(errno) = Self::validate_component_name(newname) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+        let newname = match Self::validate_component_name(newname) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let old_parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -9383,7 +9407,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "rename",
                     errno,
-                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                    format!("parent={} name={}", parent, name),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -9396,11 +9420,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "rename",
                     errno,
-                    format!(
-                        "newparent={} newname={}",
-                        newparent,
-                        newname.to_string_lossy()
-                    ),
+                    format!("newparent={} newname={}", newparent, newname),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -9449,8 +9469,8 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let old_name = name.to_string_lossy().to_string();
-        let new_name = newname.to_string_lossy().to_string();
+        let old_name = name;
+        let new_name = newname;
         if old_path != new_path {
             let existing = match resolve(&new_path) {
                 Ok(value) => value,
@@ -9881,10 +9901,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -9892,7 +9915,7 @@ impl Filesystem for FodFuse {
                     req_id,
                     "create",
                     errno,
-                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                    format!("parent={} name={}", parent, name),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
@@ -9936,7 +9959,7 @@ impl Filesystem for FodFuse {
             match self.create_writable_file_with_destination_ownership(
                 child_path.clone(),
                 parent_id,
-                name.to_string_lossy().as_ref(),
+                name,
                 mode,
                 umask,
                 subject.uid,
@@ -9968,7 +9991,7 @@ impl Filesystem for FodFuse {
             };
             let file_id = match self.create_file_for_subject(
                 parent_id,
-                name.to_string_lossy().as_ref(),
+                name,
                 mode,
                 umask,
                 subject.uid,
@@ -11227,10 +11250,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let name = match Self::validate_component_name(name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let file_type = mode & libc::S_IFMT;
         if file_type == libc::S_IFREG {
             let parent_path = match self.entry_path_for_ino(parent) {
@@ -11265,7 +11291,7 @@ impl Filesystem for FodFuse {
             };
             match self.create_file_for_subject(
                 parent_id,
-                name.to_string_lossy().as_ref(),
+                name,
                 mode,
                 umask,
                 subject.uid,
@@ -11344,7 +11370,7 @@ impl Filesystem for FodFuse {
         let create_result = if self.acl_enabled {
             self.repo.create_special_file_with_default_acl(
                 parent_id,
-                name.to_string_lossy().as_ref(),
+                name,
                 mode,
                 umask,
                 subject.uid,
@@ -11358,7 +11384,7 @@ impl Filesystem for FodFuse {
         } else {
             self.repo.create_special_file_for_subject(
                 parent_id,
-                name.to_string_lossy().as_ref(),
+                name,
                 mode,
                 subject.uid,
                 subject.gid,
@@ -11411,10 +11437,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(link_name) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let link_name = match Self::validate_component_name(link_name) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let target = match Self::os_str_as_utf8(target.as_os_str()) {
             Ok(target) => target.to_owned(),
             Err(errno) => {
@@ -11448,7 +11477,7 @@ impl Filesystem for FodFuse {
         let create_result = if self.acl_enabled {
             self.repo.create_symlink_for_subject_with_acl(
                 parent_id,
-                link_name.to_string_lossy().as_ref(),
+                link_name,
                 &target,
                 subject.uid,
                 subject.gid,
@@ -11458,7 +11487,7 @@ impl Filesystem for FodFuse {
         } else {
             self.repo.create_symlink_for_subject(
                 parent_id,
-                link_name.to_string_lossy().as_ref(),
+                link_name,
                 &target,
                 subject.uid,
                 subject.gid,
@@ -11509,10 +11538,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        if let Err(errno) = Self::validate_component_name(newname) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
+        let newname = match Self::validate_component_name(newname) {
+            Ok(name) => name,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let source_path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
@@ -11597,7 +11629,7 @@ impl Filesystem for FodFuse {
             }
         };
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
-        let target_name = newname.to_string_lossy();
+        let target_name = newname;
         let create_result = if source_kind == "symlink" {
             if self.acl_enabled {
                 self.repo

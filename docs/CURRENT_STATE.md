@@ -4,6 +4,15 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+FUSE namespace callbacks carry pathname components as validated UTF-8 through
+path construction and PostgreSQL calls; they do not turn invalid `OsStr` bytes
+into replacement characters with `to_string_lossy()`. A non-UTF-8 mountpoint
+is also rejected before client-session registration. The existing mounted
+pathname regression checks `EILSEQ` for invalid-UTF-8 create and rename inputs
+and verifies that valid U+FFFD names remain distinct. PostgreSQL NUL-delimited
+result fields are decoded strictly and malformed UTF-8 returns `EIO`. See
+[`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
+
 FOD 3.4.515 routes failures from root creation and block-size setup through
 the import rollback path after the plan is recorded as running. This closes
 the ordinary error-path leak that could leave a partial import permanently in

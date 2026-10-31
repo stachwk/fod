@@ -165,6 +165,14 @@ wstawionego przed polem patch.
 Montowane regresje `test-symlink.sh` i `test_xattr.py` sprawdzają także, że
 niepoprawny UTF-8 w celu symlinka i nazwie xattr kończy się `EILSEQ` bez
 aliasowania poprawnego wejścia z U+FFFD.
+Callbacki namespace przekazują dalej wyłącznie komponenty UTF-8 zwrócone przez
+walidator; budowa ścieżki i argumenty PostgreSQL nie używają konwersji
+`to_string_lossy()`. Także pola NUL-delimited odczytane z PostgreSQL są
+dekodowane ściśle; uszkodzone UTF-8 kończy operację `EIO`, zamiast aliasować
+wartość przez U+FFFD. `test_path_trailing_slash.py` sprawdza `EILSEQ` dla
+utworzenia pliku oraz obu stron `rename()` i brak aliasowania poprawnej nazwy
+z U+FFFD. Nie-UTF-8 mountpoint jest odrzucany przed rejestracją sesji zamiast
+zapisywania jego stratnej reprezentacji w PostgreSQL.
 
 Pełna macierz end-to-end dla wielu wersji Linux/libfuse i dystrybucji pozostaje
 poza pokryciem. Host systemowy nadal ma libfuse 3.17.4, ale testowe buildy
