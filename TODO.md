@@ -2441,3 +2441,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   Both tests passed on PostgreSQL 16.15 after verifying the FOD
   `--with-blocksize=32` build and live `SHOW block_size=32768`; temporary
   databases were dropped and the shared schema-31 database was not modified.
+
+## FOD 3.4.495 — reject malformed PostgreSQL boolean results
+
+- [x] Route PostgreSQL text booleans through one strict decoder. Unknown values
+  now return an error instead of being interpreted as `false` in connection
+  role/snapshot checks, schema readiness and upgrade admission, advisory-lock
+  results, write-lease and namespace-conflict checks, `rename()` cycle checks,
+  and idempotency-token results. This matters for deferred-unlink cleanup and
+  write fencing: malformed lease state must not imply that no lease exists.
+  The pure decoder regression, hotpath crate check and formatting pass. These
+  checks do not require a PostgreSQL query, so no database was changed.

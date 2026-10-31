@@ -992,3 +992,11 @@ confirms expired-row removal, active-row preservation and both return values.
 Temporary databases are created/dropped through the `postgres` database, so
 the fixtures do not depend on the shared FOD database meeting the current
 schema floor. The schema-31 shared database was left unchanged.
+FOD 3.4.495 routes PostgreSQL text booleans through one strict decoder. It
+rejects unknown values in lease-presence, write-fencing, advisory-lock,
+namespace-conflict, rename-cycle, schema-readiness/upgrade-admission, and
+idempotency results instead of mapping them to `false`. This closes a
+fail-open path where malformed active-lease state could allow deferred unlink
+to purge an inode or allow a write to proceed without a lease. The pure decoder
+test and hotpath compile pass; these checks require no database, so no claim of
+new PostgreSQL integration coverage is made.

@@ -1979,15 +1979,8 @@ unsafe fn probe_connection_target(
             "invalid PostgreSQL target identity probe `{value}`"
         ));
     }
-    let parse_bool = |value: &str| -> Result<bool, String> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "t" | "true" | "1" | "on" => Ok(true),
-            "f" | "false" | "0" | "off" => Ok(false),
-            other => Err(format!("invalid PostgreSQL boolean `{other}`")),
-        }
-    };
-    let recovery = parse_bool(fields[0])?;
-    let read_only = parse_bool(fields[1])?;
+    let recovery = parse_postgres_bool(fields[0], "connection recovery state")?;
+    let read_only = parse_postgres_bool(fields[1], "connection read-only state")?;
     let system_identifier = fields[2].trim().to_string();
     let server_endpoint = fields[3].trim();
     let postmaster_start = fields[4].trim();
@@ -2002,6 +1995,16 @@ unsafe fn probe_connection_target(
         system_identifier,
         server_fingerprint: format!("{server_endpoint}|{postmaster_start}"),
     })
+}
+
+fn parse_postgres_bool(value: &str, description: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "t" | "true" | "1" | "on" => Ok(true),
+        "f" | "false" | "0" | "off" => Ok(false),
+        _ => Err(format!(
+            "invalid PostgreSQL boolean for {description}: `{value}`"
+        )),
+    }
 }
 
 unsafe fn validate_connection_target_role(
@@ -2850,10 +2853,7 @@ unsafe fn schema_is_initialized_on_conn(conn: *mut PGconn) -> Result<bool, Strin
     ))
     .map_err(|_| "SQL contains NUL byte".to_string())?;
     let value = query_scalar_text_on_conn(conn, &sql)?;
-    Ok(matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "t" | "true" | "1" | "on"
-    ))
+    parse_postgres_bool(&value, "FOD schema initialization state")
 }
 
 unsafe fn fetch_single_text(res: *mut PGresult) -> Result<String, String> {
@@ -7333,15 +7333,8 @@ impl DbRepo {
                 value.trim()
             ));
         }
-        let transaction_read_only = match fields[1].trim().to_ascii_lowercase().as_str() {
-            "t" | "true" | "on" | "1" => true,
-            "f" | "false" | "off" | "0" => false,
-            other => {
-                return Err(format!(
-                    "invalid PostgreSQL source transaction_read_only value `{other}`"
-                ));
-            }
-        };
+        let transaction_read_only =
+            parse_postgres_bool(fields[1], "source transaction_read_only state")?;
         let wal_replay_lag_bytes = if fields[2].trim().is_empty() {
             None
         } else {
@@ -7420,10 +7413,7 @@ impl DbRepo {
 
     fn query_schema_ready_bool(&self, sql: &str) -> Result<bool, String> {
         let value = self.query_scalar_text(sql)?;
-        Ok(matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        ))
+        parse_postgres_bool(&value, "runtime schema readiness")
     }
 
     fn runtime_lock_schema_is_ready(&self) -> Result<bool, String> {
@@ -8441,10 +8431,7 @@ impl DbRepo {
                     )
                     .map_err(|_| "SQL contains NUL byte".to_string())?;
                     let upgrade_state = query_scalar_text_on_conn(conn, &upgrade_state_sql)?;
-                    if matches!(
-                        upgrade_state.trim().to_ascii_lowercase().as_str(),
-                        "t" | "true" | "1" | "on"
-                    ) {
+                    if parse_postgres_bool(&upgrade_state, "schema upgrade state")? {
                         return Err(
                             "FOD schema upgrade is in progress or was interrupted; rerun `mkfs.fod upgrade` before mounting".to_string(),
                         );
@@ -8703,10 +8690,7 @@ impl DbRepo {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
             let value = fetch_single_text(res)?;
-            Ok(matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "t" | "true" | "1" | "on"
-            ))
+            parse_postgres_bool(&value, "active file-open lease state")
         })
     }
 
@@ -8998,10 +8982,7 @@ impl DbRepo {
         let empty_params: [&CString; 0] = [];
         let res = exec_params(conn, &sql, &empty_params)?;
         let value = fetch_single_text(res)?;
-        Ok(matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        ))
+        parse_postgres_bool(&value, "advisory transaction-lock result")
     }
 
     unsafe fn try_advisory_xact_lock_text_on_conn(
@@ -9013,10 +8994,7 @@ impl DbRepo {
         let params = [resource_key];
         let res = exec_params(conn, &sql, &params)?;
         let value = fetch_single_text(res)?;
-        Ok(matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        ))
+        parse_postgres_bool(&value, "resource advisory transaction-lock result")
     }
 
     unsafe fn advisory_xact_lock_text_on_conn(
@@ -9237,10 +9215,7 @@ impl DbRepo {
                 let session_params = [&session_id];
                 let session_res = exec_params(conn, &session_active_sql, &session_params)?;
                 let session_active = fetch_single_text(session_res)?;
-                if !matches!(
-                    session_active.trim().to_ascii_lowercase().as_str(),
-                    "t" | "true" | "1" | "on"
-                ) {
+                if !parse_postgres_bool(&session_active, "write-ownership client session state")? {
                     return Err("write ownership client session is missing or expired".to_string());
                 }
 
@@ -9255,10 +9230,10 @@ impl DbRepo {
                     &destination_conflict_params,
                 )?;
                 let destination_conflict = fetch_single_text(destination_conflict_res)?;
-                if matches!(
-                    destination_conflict.trim().to_ascii_lowercase().as_str(),
-                    "t" | "true" | "1" | "on"
-                ) {
+                if parse_postgres_bool(
+                    &destination_conflict,
+                    "write-ownership destination conflict",
+                )? {
                     return Ok(None);
                 }
 
@@ -9270,10 +9245,7 @@ impl DbRepo {
                     let file_conflict_res =
                         exec_params(conn, &file_conflict_sql, &file_conflict_params)?;
                     let file_conflict = fetch_single_text(file_conflict_res)?;
-                    if matches!(
-                        file_conflict.trim().to_ascii_lowercase().as_str(),
-                        "t" | "true" | "1" | "on"
-                    ) {
+                    if parse_postgres_bool(&file_conflict, "write-ownership file conflict")? {
                         return Ok(None);
                     }
                 }
@@ -9478,10 +9450,7 @@ impl DbRepo {
                         let detached_params = [file_id_param, &parent_key, &name_param];
                         let detached_res = exec_params(conn, &detached_sql, &detached_params)?;
                         let detached = fetch_single_text(detached_res)?;
-                        if !matches!(
-                            detached.trim().to_ascii_lowercase().as_str(),
-                            "t" | "true" | "1" | "on"
-                        ) {
+                        if !parse_postgres_bool(&detached, "write-ownership detached-file state")? {
                             return Ok(false);
                         }
                     }
@@ -9699,10 +9668,10 @@ impl DbRepo {
                         exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
                     let existing_token = fetch_single_text_option(existing_token_res)?;
                     match existing_token {
-                        Some(existing) => Ok(Some(matches!(
-                            existing.trim().to_ascii_lowercase().as_str(),
-                            "t" | "true" | "1" | "on"
-                        ))),
+                        Some(existing) => Ok(Some(parse_postgres_bool(
+                            &existing,
+                            "flock request-token result",
+                        )?)),
                         None => Ok(None),
                     }
                 },
@@ -10736,13 +10705,6 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
-        let parse_bool = |value: &str| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "t" | "true" | "1" | "on"
-            )
-        };
-
         self.with_cached_connection(|conn| unsafe {
             transactional_replay_confirmed(
                 conn,
@@ -10752,7 +10714,10 @@ impl DbRepo {
                         exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
                     let existing_token = fetch_single_text_option(existing_token_res)?;
                     match existing_token {
-                        Some(existing) => Ok(Some(parse_bool(&existing))),
+                        Some(existing) => Ok(Some(parse_postgres_bool(
+                            &existing,
+                            "hardlink-promotion request-token result",
+                        )?)),
                         None => Ok(None),
                     }
                 },
@@ -10781,7 +10746,7 @@ impl DbRepo {
                         let params = [&request_token, &file_id, &did_promote];
                         let res = exec_params(conn, &sql_store_request_token, &params)?;
                         let stored = fetch_single_text(res)?;
-                        if parse_bool(&stored) {
+                        if parse_postgres_bool(&stored, "hardlink-promotion stored false result")? {
                             return Err(
                                 "hardlink promotion request token stored unexpected result"
                                     .to_string(),
@@ -10810,7 +10775,7 @@ impl DbRepo {
                     let params = [&request_token, &file_id, &did_promote];
                     let res = exec_params(conn, &sql_store_request_token, &params)?;
                     let stored = fetch_single_text(res)?;
-                    if !parse_bool(&stored) {
+                    if !parse_postgres_bool(&stored, "hardlink-promotion stored true result")? {
                         return Err(
                             "hardlink promotion request token stored unexpected result".to_string()
                         );
@@ -11436,12 +11401,6 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        let parse_bool = |value: &str| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "t" | "true" | "1" | "on"
-            )
-        };
         let parse_resolved = parse_resolved_rename_entry;
         let matches_source = |resolved: Option<&(String, u64, Option<u64>)>| match resolved {
             Some((kind, entry_id, file_id)) => {
@@ -11492,7 +11451,8 @@ impl DbRepo {
                     exec_command_params(conn, &sql_prune_destinations, &destination_params)?;
 
                     let res = exec_params(conn, &sql_destination_conflict, &destination_params)?;
-                    if parse_bool(&fetch_single_text(res)?) {
+                    if parse_postgres_bool(&fetch_single_text(res)?, "rename destination conflict")?
+                    {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
@@ -11503,7 +11463,7 @@ impl DbRepo {
                         let params = [file_id_param];
                         exec_command_params(conn, &sql_prune_file, &params)?;
                         let res = exec_params(conn, &sql_file_conflict, &params)?;
-                        if parse_bool(&fetch_single_text(res)?) {
+                        if parse_postgres_bool(&fetch_single_text(res)?, "rename file conflict")? {
                             return Ok(RenameFileReplaceOutcome::Busy);
                         }
                     }
@@ -11604,7 +11564,10 @@ impl DbRepo {
                         let parent_id = CString::new(parent_id.to_string())
                             .map_err(|_| "destination parent id contains NUL byte".to_string())?;
                         let cycle = exec_params(conn, &cycle_sql, &[&directory_id, &parent_id])?;
-                        if parse_bool(&fetch_single_text(cycle)?) {
+                        if parse_postgres_bool(
+                            &fetch_single_text(cycle)?,
+                            "rename directory-cycle result",
+                        )? {
                             return Ok(RenameFileReplaceOutcome::InvalidDirectoryCycle);
                         }
                     }
@@ -14609,10 +14572,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let res = exec_params(conn, &sql, &[&file_id_text])?;
         let active = fetch_single_text(res)?;
-        if matches!(
-            active.trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        ) {
+        if parse_postgres_bool(&active, "active file-write lease state")? {
             return Err(format!(
                 "{} file_id={} missing_fence active_file_lease",
                 WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX, file_id
@@ -15569,6 +15529,19 @@ mod tests {
     use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn postgres_boolean_decoder_accepts_known_values_and_rejects_unknown_values() {
+        for value in ["t", " true ", "1", "ON"] {
+            assert_eq!(parse_postgres_bool(value, "test"), Ok(true));
+        }
+        for value in ["f", " false ", "0", "OFF"] {
+            assert_eq!(parse_postgres_bool(value, "test"), Ok(false));
+        }
+        for value in ["", "unknown", "null", "2"] {
+            assert!(parse_postgres_bool(value, "test").is_err());
+        }
+    }
 
     #[test]
     fn positive_postgres_id_decoder_rejects_invalid_values() {
