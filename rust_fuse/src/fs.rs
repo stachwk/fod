@@ -4867,7 +4867,7 @@ impl FodFuse {
             }
         };
 
-        if target.trim() != path {
+        if target != path {
             return Ok(());
         }
 
@@ -4922,7 +4922,7 @@ impl FodFuse {
             }
         };
 
-        if target.trim() != path {
+        if target != path {
             return Ok(());
         }
 

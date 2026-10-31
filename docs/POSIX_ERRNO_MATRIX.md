@@ -144,6 +144,12 @@ FOD został wywołany:
   cel symlinka, a `test_xattr.py` nie-UTF-8 nazwę xattr i operacje odczytu,
   zapisu oraz usunięcia; wszystkie potwierdzają `EILSEQ` i brak aliasowania
   poprawnego wejścia z U+FFFD.
+- Ścieżki linuksowe mogą kończyć się spacją lub tabulatorem. Montowany
+  `test_path_trailing_slash.py` wykrył, że warstwa PostgreSQL usuwała te bajty
+  przez `str::trim()` podczas rozwiązywania ścieżek. Lookupi przekazują teraz
+  nazwę bez przycinania; regresja rozdziela nazwy `trailing`, `trailing ` i
+  `trailing\t`, sprawdza odczyt/rename/unlink oraz komponent w rodzicu
+  zakończonym spacją lub tabulatorem.
 
 Podstawa źródłowa: Linux [`read_write.c`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c#L3120-L3158)
 (`vfs_read`), [`vfs_write`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c#L3314-L3354),

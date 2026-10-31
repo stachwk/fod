@@ -522,6 +522,43 @@ def main() -> None:
                 "open name longer than NAME_MAX",
             )
 
+            plain_name = directory / "trailing"
+            space_name = directory / "trailing "
+            tab_name = directory / "trailing\t"
+            plain_name.write_bytes(b"plain")
+            space_name.write_bytes(b"space")
+            tab_name.write_bytes(b"tab")
+            assert plain_name.read_bytes() == b"plain"
+            assert space_name.read_bytes() == b"space"
+            assert tab_name.read_bytes() == b"tab"
+            assert len(
+                {plain_name.stat().st_ino, space_name.stat().st_ino, tab_name.stat().st_ino}
+            ) == 3
+
+            renamed_space_name = directory / "renamed "
+            renamed_tab_name = directory / "renamed\t"
+            os.rename(space_name, renamed_space_name)
+            os.rename(tab_name, renamed_tab_name)
+            assert renamed_space_name.read_bytes() == b"space"
+            assert renamed_tab_name.read_bytes() == b"tab"
+            os.unlink(renamed_space_name)
+            os.unlink(renamed_tab_name)
+            assert plain_name.read_bytes() == b"plain"
+
+            for parent_name, child_payload in (
+                ("parent ", b"space-parent"),
+                ("parent\t", b"tab-parent"),
+            ):
+                whitespace_parent = directory / parent_name
+                whitespace_parent.mkdir()
+                child = whitespace_parent / "child "
+                renamed_child = whitespace_parent / "renamed\t"
+                child.write_bytes(child_payload)
+                os.rename(child, renamed_child)
+                assert renamed_child.read_bytes() == child_payload
+                os.unlink(renamed_child)
+                os.rmdir(whitespace_parent)
+
             invalid_utf8_name = os.fsencode(directory) + b"/invalid-\xff-name"
             replacement_name = directory / "invalid-\ufffd-name"
             expect_errno(
@@ -548,6 +585,7 @@ def main() -> None:
                 "mkdir/link/symlink_dest:EEXIST,unlink/rmdir/rename:ENOTDIR "
                 "chmod_target=0o711 utime_target=exact truncate:EISDIR "
                 "readlink:EINVAL rename:ENOTDIR leading_slashes=//,/// "
+                "whitespace_names=distinct rename=exact parent_space/tab=exact "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
                 "non_utf8_create=EILSEQ"
             )

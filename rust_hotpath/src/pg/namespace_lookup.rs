@@ -234,7 +234,7 @@ impl DbRepo {
     }
 
     pub fn get_file_id(&self, path: &str) -> Result<Option<u64>, String> {
-        let normalized = path.trim();
+        let normalized = path;
         let (parent_path, file_name) = match normalized.rsplit_once('/') {
             Some((parent, name)) if !name.is_empty() => {
                 (if parent.is_empty() { "/" } else { parent }, name)
@@ -286,7 +286,7 @@ impl DbRepo {
     }
 
     pub fn get_file_mode_value(&self, path: &str) -> Result<Option<String>, String> {
-        let normalized = path.trim();
+        let normalized = path;
         let (parent_path, file_name) = match normalized.rsplit_once('/') {
             Some((parent, name)) if !name.is_empty() => {
                 (if parent.is_empty() { "/" } else { parent }, name)
@@ -362,7 +362,7 @@ impl DbRepo {
     }
 
     pub fn get_hardlink_id(&self, path: &str) -> Result<Option<u64>, String> {
-        let normalized = path.trim();
+        let normalized = path;
         let (parent_path, link_name) = match normalized.rsplit_once('/') {
             Some((parent, name)) if !name.is_empty() => {
                 (if parent.is_empty() { "/" } else { parent }, name)
@@ -534,7 +534,7 @@ impl DbRepo {
     }
 
     pub fn get_symlink_id(&self, path: &str) -> Result<Option<u64>, String> {
-        let normalized = path.trim();
+        let normalized = path;
         let (parent_path, link_name) = match normalized.rsplit_once('/') {
             Some((parent, name)) if !name.is_empty() => {
                 (if parent.is_empty() { "/" } else { parent }, name)
@@ -586,7 +586,7 @@ impl DbRepo {
     }
 
     pub fn resolve_path(&self, path: &str) -> Result<ResolvedPath, String> {
-        let normalized = path.trim();
+        let normalized = path;
         if normalized.is_empty() {
             return Ok(ResolvedPath {
                 parent_id: None,
@@ -659,7 +659,7 @@ impl DbRepo {
         &self,
         path: &str,
     ) -> Result<Vec<DirectoryEntryMetadata>, String> {
-        let normalized = path.trim();
+        let normalized = path;
         let parent_id = match self.lookup_directory(normalized)? {
             DirectoryLookup::Root => None,
             DirectoryLookup::Directory(id) => Some(id),
@@ -739,7 +739,7 @@ impl DbRepo {
     }
 
     pub fn list_directory_entries_blob(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
-        let normalized = path.trim();
+        let normalized = path;
         let parent_id = match self.lookup_directory(normalized)? {
             DirectoryLookup::Root => None,
             DirectoryLookup::Directory(id) => Some(id),

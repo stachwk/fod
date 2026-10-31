@@ -90,6 +90,11 @@ primary-authoritative mutation coverage.
 primary-resolved path before returning a target; a stale inode cannot follow a
 replacement symlink at the same name. The two-mount regression is
 `test_stale_inode_readlink.py` (`make test-stale-inode-readlink`).
+Pathname bytes that are valid on Linux, including trailing spaces and tabs, are
+preserved by FUSE path normalization and PostgreSQL namespace lookup. The
+mounted `test_path_trailing_slash.py` regression distinguishes names with and
+without those characters, then checks reads, rename, unlink and children under
+parent directories ending in a space or tab.
 
 POSIX record locks use the database `file_id` verified from the open FUSE
 handle. They remain attached to an unlinked inode if another mount creates a

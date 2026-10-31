@@ -33,13 +33,17 @@ Reading guide:
   expand_user_only_replaces_tilde_prefix_and_preserves_path_bytes` przeszedł
   2026-10-31. Nie rekonstruujemy ścieżki przez konwersję tekstową.
 
-- [ ] **Dodaj regresję dla nazw ścieżek zakończonych białymi znakami.**
-  `normalize_path()` używało `trim()`, które usuwało końcowe spacje i inne
-  białe znaki z ostatniego komponentu, kierując operację na inną ścieżkę.
-  Normalizacja zachowuje teraz białe znaki i zmienia wyłącznie separatory.
-  Dodać test montowany tworzący jednocześnie `name` i `name `, sprawdzający
-  lookup, odczyt, rename i unlink bez aliasowania; uwzględnić również końcowy
-  tabulator oraz spację w katalogu nadrzędnym.
+- [x] **Nazwy zakończone spacją lub tabulatorem nie mogą aliasować krótszej ścieżki.**
+  Montowany test odtworzył kolizję trzech nazw: `get_file_id()`,
+  `get_file_mode_value()`, `get_hardlink_id()`, `get_symlink_id()`,
+  `resolve_path()`, `list_directory_entry_metadata()` i
+  `list_directory_entries_blob()` usuwały spacje/tabulatory przez `path.trim()`.
+  Teraz lookupi przekazują ścieżkę bez zmian; test rozróżnia `trailing`,
+  `trailing ` i `trailing\t`, sprawdza odczyt, rename i unlink oraz pliki w
+  katalogach `parent ` i `parent\t`. Haki wyścigowe testów porównują też
+  ścieżki dokładnie, bez `trim()`. `test_path_trailing_slash.py` przeszedł
+  2026-10-31 na Linux 6.17.0-41/libfuse3 3.17.4 z PostgreSQL 16.15;
+  test używał izolowanej bazy, którą usunięto po przebiegu.
 
 - [x] **Do not treat external `dirfd()` closure as a POSIX `closedir()` test.**
   The directory-stream regression had closed the descriptor returned by
