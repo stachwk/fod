@@ -72,6 +72,9 @@ broader fault-injection audit.
 FOD 3.4.488 makes hash and import-plan result readers fail on malformed SQL
 row widths instead of omitting rows; the pure shape-validator regression is
 in place. Continue the broader indexer and database fault-injection audit.
+FOD 3.4.489 applies exact result-shape checks throughout indexer row decoders,
+including source, snapshot, catalogue, cleanup and aggregate reads. All 35
+indexer unit tests passed; continue broader database fault-injection testing.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

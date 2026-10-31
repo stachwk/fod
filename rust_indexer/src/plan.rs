@@ -1,6 +1,9 @@
 use crate::db::{ensure_indexer_request_token_schema, sql_quote_literal};
 use crate::hash;
-use crate::model::{require_exact_row_columns, DuplicateSet, ImportPlanSummary, IndexedFile};
+use crate::model::{
+    require_exact_row_columns, require_single_exact_row, DuplicateSet, ImportPlanSummary,
+    IndexedFile,
+};
 use crate::output::{
     DuplicateReportSnapshot, DuplicateSetMemberView, DuplicateSetSnapshot, ImportPlanEntryView,
     ImportPlanSnapshot,
@@ -21,9 +24,7 @@ pub(crate) struct PlannableFile {
 
 impl PlannableFile {
     pub(crate) fn from_row(row: &[String]) -> Result<Self, String> {
-        if row.len() < 21 {
-            return Err("plannable file row is too short".to_string());
-        }
+        require_exact_row_columns(row, 21, "plannable file")?;
         let file = IndexedFile::from_row(&row[0..12])?;
         let hash_present = !row[12].trim().is_empty();
         let hash = if hash_present {
@@ -191,9 +192,7 @@ fn parse_bool(value: &str) -> bool {
 }
 
 fn duplicate_set_member_from_row(row: &[String]) -> Result<DuplicateSetMemberView, String> {
-    if row.len() < 15 {
-        return Err("duplicate set member row is too short".to_string());
-    }
+    require_exact_row_columns(row, 15, "duplicate set member")?;
     let file = IndexedFile::from_row(&row[0..12])?;
     let source_name = file.source_name.clone();
     let source_path = file.source_path();
@@ -259,9 +258,7 @@ pub(crate) fn load_duplicate_set_snapshot(
     let mut duplicate_set: Option<DuplicateSet> = None;
     let mut members = Vec::new();
     for row in rows {
-        if row.len() < 21 {
-            continue;
-        }
+        require_exact_row_columns(&row, 21, "duplicate set snapshot")?;
         if source::is_ignored_index_path(Path::new(&row[9]), &row[10]) {
             continue;
         }
@@ -349,9 +346,7 @@ pub(crate) fn load_duplicate_report_snapshot(
         if file_size == 0 {
             continue;
         }
-        let set_id = row
-            .first()
-            .ok_or_else(|| "duplicate set row is malformed".to_string())?
+        let set_id = row[0]
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid duplicate set id: {err}"))?;
@@ -399,12 +394,16 @@ pub(crate) fn load_import_plan_snapshot(
         WHERE id_import_plan = {plan_id}
         ",
     ))?;
-    let plan_row = plan_rows
-        .first()
-        .ok_or_else(|| format!("unknown import plan: {plan_id}"))?;
-    if plan_row.len() < 14 {
-        return Err("import plan row is too short".to_string());
-    }
+    let plan_row = match plan_rows.as_slice() {
+        [] => return Err(format!("unknown import plan: {plan_id}")),
+        [_] => require_single_exact_row(&plan_rows, 14, "import plan summary")?,
+        _ => {
+            return Err(format!(
+                "import plan lookup returned {} rows",
+                plan_rows.len()
+            ))
+        }
+    };
     let summary = ImportPlanSummary {
         plan_id: Some(plan_id),
         source_filter: if plan_row[6].trim().is_empty() {

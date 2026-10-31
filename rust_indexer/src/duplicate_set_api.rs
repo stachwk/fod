@@ -1,3 +1,4 @@
+use crate::model::{require_exact_row_columns, require_single_exact_row};
 use crate::output::{IndexerCapabilitiesOutput, INDEXER_MAX_PAGE_LIMIT};
 use crate::read_api;
 use fod_rust_hotpath::pg::DbRepo;
@@ -145,9 +146,7 @@ fn validate_duplicate_set_list_request(limit: usize, cursor: Option<u64>) -> Res
 }
 
 fn duplicate_set_list_item_from_row(row: &[String]) -> Result<DuplicateSetListItem, String> {
-    if row.len() < 8 {
-        return Err("duplicate-set list row is too short".to_string());
-    }
+    require_exact_row_columns(row, 8, "duplicate-set list")?;
     Ok(DuplicateSetListItem {
         duplicate_set_id: parse_u64(&row[0], "duplicate-set id")?,
         hash_algorithm: row[1].clone(),
@@ -161,10 +160,8 @@ fn duplicate_set_list_item_from_row(row: &[String]) -> Result<DuplicateSetListIt
 }
 
 fn parse_count(rows: &[Vec<String>]) -> Result<u64, String> {
-    rows.first()
-        .and_then(|row| row.first())
-        .ok_or_else(|| "duplicate-set total row is missing".to_string())
-        .and_then(|value| parse_u64(value, "duplicate-set total"))
+    let row = require_single_exact_row(rows, 1, "duplicate-set total")?;
+    parse_u64(&row[0], "duplicate-set total")
 }
 
 fn parse_u64(value: &str, label: &str) -> Result<u64, String> {

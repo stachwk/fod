@@ -1,5 +1,5 @@
 use crate::db::sql_quote_literal;
-use crate::model::CleanupFailedSummary;
+use crate::model::{require_exact_row_columns, require_single_exact_row, CleanupFailedSummary};
 use fod_rust_hotpath::pg::{DbRepo, DbRepoTransaction};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,14 +25,12 @@ fn load_cleanup_plan(repo: &DbRepoTransaction<'_>, plan_id: u64) -> Result<Clean
         FOR UPDATE
         ",
     ))?;
-    let row = rows
-        .first()
-        .ok_or_else(|| format!("unknown import plan: {plan_id}"))?;
-    let status = row
-        .first()
-        .ok_or_else(|| "missing plan status".to_string())?
-        .trim()
-        .to_string();
+    let row = match rows.as_slice() {
+        [] => return Err(format!("unknown import plan: {plan_id}")),
+        [_] => require_single_exact_row(&rows, 2, "cleanup import plan")?,
+        _ => return Err(format!("cleanup plan lookup returned {} rows", rows.len())),
+    };
+    let status = row[0].trim().to_string();
     let source_filter = row
         .get(1)
         .ok_or_else(|| "missing plan source filter".to_string())?
@@ -56,12 +54,9 @@ fn find_root_name(repo: &DbRepoTransaction<'_>, plan_id: u64) -> Result<Option<S
     ))?;
     match rows.len() {
         0 => Ok(None),
-        1 => rows
-            .first()
-            .and_then(|row| row.first())
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| "root directory row is malformed".to_string()),
+        1 => Ok(Some(
+            require_single_exact_row(&rows, 1, "materialization root")?[0].clone(),
+        )),
         _ => Err(format!(
             "found multiple materialization roots for plan {plan_id}"
         )),
@@ -91,9 +86,7 @@ fn collect_directory_rows(
     ))?;
     rows.iter()
         .map(|row| {
-            if row.len() < 2 {
-                return Err("directory subtree row is too short".to_string());
-            }
+            require_exact_row_columns(row, 2, "directory subtree")?;
             Ok((
                 parse_u64(&row[0], "directory id")?,
                 parse_u64(&row[1], "directory depth")?,
@@ -126,9 +119,7 @@ fn collect_file_rows(
     ))?;
     rows.iter()
         .map(|row| {
-            if row.len() < 4 {
-                return Err("file subtree row is too short".to_string());
-            }
+            require_exact_row_columns(row, 4, "file subtree")?;
             Ok((
                 parse_u64(&row[0], "file id")?,
                 parse_u64(&row[1], "data object id")?,
@@ -233,9 +224,8 @@ fn collect_data_object_file_ids(
     ))?;
     rows.iter()
         .map(|row| {
-            row.first()
-                .ok_or_else(|| "file row is malformed".to_string())
-                .and_then(|value| parse_u64(value, "file id"))
+            require_exact_row_columns(row, 1, "data-object file reference")?;
+            parse_u64(&row[0], "file id")
         })
         .collect()
 }

@@ -1,6 +1,6 @@
 use crate::cli::SourceKind;
 use crate::db::sql_quote_literal;
-use crate::model::{IndexSource, SourceBrowseEntry};
+use crate::model::{require_single_exact_row, IndexSource, SourceBrowseEntry};
 use crate::source;
 use fod_rust_hotpath::pg::{DbRepo, IndexSourceStageRow};
 use std::collections::HashMap;
@@ -51,9 +51,11 @@ pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
         "
     );
     let rows = repo.query_rows_text(&sql)?;
-    let row = rows
-        .first()
-        .ok_or_else(|| format!("unknown source: {name}"))?;
+    let row = match rows.as_slice() {
+        [] => return Err(format!("unknown source: {name}")),
+        [_] => require_single_exact_row(&rows, 4, "index source lookup")?,
+        _ => return Err(format!("source lookup returned {} rows", rows.len())),
+    };
     IndexSource::from_row(row)
 }
 
@@ -87,9 +89,11 @@ pub fn remove_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
              RETURNING id_index_source, name, kind, root_path"
         ))
     })?;
-    let row = rows
-        .first()
-        .ok_or_else(|| format!("unknown source: {name}"))?;
+    let row = match rows.as_slice() {
+        [] => return Err(format!("unknown source: {name}")),
+        [_] => require_single_exact_row(&rows, 4, "index source removal")?,
+        _ => return Err(format!("source removal returned {} rows", rows.len())),
+    };
     IndexSource::from_row(row)
 }
 

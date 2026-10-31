@@ -1,5 +1,6 @@
 use crate::duplicate_set_api;
 use crate::hash;
+use crate::model::{require_exact_row_columns, require_single_exact_row};
 use crate::output::IndexerCapabilitiesOutput;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -208,9 +209,15 @@ pub fn read_file(
         LIMIT 1
         "
     ))?;
-    let row = rows
-        .first()
-        .ok_or_else(|| format!("file_read_not_found: indexed file {file_id} does not exist"))?;
+    let row = match rows.as_slice() {
+        [] => {
+            return Err(format!(
+                "file_read_not_found: indexed file {file_id} does not exist"
+            ))
+        }
+        [_] => require_single_exact_row(&rows, 22, "file read metadata")?,
+        _ => return Err(format!("file_read_metadata returned {} rows", rows.len())),
+    };
     let record = file_read_record_from_row(row)?;
     read_revalidated_record(record, offset, length)
 }
@@ -485,9 +492,7 @@ fn classify_io_error(action: &str, path: &Path, err: std::io::Error) -> String {
 }
 
 fn file_read_record_from_row(row: &[String]) -> Result<FileReadRecord, String> {
-    if row.len() < 22 {
-        return Err("file read row is too short".to_string());
-    }
+    require_exact_row_columns(row, 22, "file read metadata")?;
     Ok(FileReadRecord {
         file_id: parse_u64(&row[0], "file id")?,
         source_id: parse_u64(&row[1], "source id")?,

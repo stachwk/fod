@@ -1,4 +1,5 @@
 use crate::db::sql_quote_literal;
+use crate::model::{require_exact_row_columns, require_single_exact_row};
 use crate::output::{IndexerCapabilitiesOutput, INDEXER_MAX_PAGE_LIMIT};
 use fod_rust_hotpath::pg::DbRepo;
 use serde::Serialize;
@@ -313,9 +314,11 @@ pub fn show_file(repo: &DbRepo, id: u64) -> Result<FileShowOutput, String> {
         &format!("WHERE f.id_file = {id}"),
         "LIMIT 1",
     ))?;
-    let row = rows
-        .first()
-        .ok_or_else(|| format!("indexed file {id} does not exist"))?;
+    let row = match rows.as_slice() {
+        [] => return Err(format!("indexed file {id} does not exist")),
+        [_] => require_single_exact_row(&rows, 19, "indexed file lookup")?,
+        _ => return Err(format!("indexed file lookup returned {} rows", rows.len())),
+    };
     Ok(FileShowOutput {
         consistency: "live",
         item: file_catalog_item_from_row(row)?,
@@ -532,9 +535,7 @@ fn validate_file_catalog_request(
 }
 
 fn file_catalog_item_from_row(row: &[String]) -> Result<FileCatalogItem, String> {
-    if row.len() < 19 {
-        return Err("indexed file row is too short".to_string());
-    }
+    require_exact_row_columns(row, 19, "indexed file catalogue")?;
     let source_root = row[4].clone();
     let path = row[5].clone();
     let path_view = Path::new(&path);
@@ -596,9 +597,7 @@ fn validate_plan_list_request(
 }
 
 fn import_plan_list_item_from_row(row: &[String]) -> Result<ImportPlanListItem, String> {
-    if row.len() < 7 {
-        return Err("import plan list row is too short".to_string());
-    }
+    require_exact_row_columns(row, 7, "import plan list")?;
     Ok(ImportPlanListItem {
         plan_id: parse_u64(&row[0], "import plan id")?,
         status: row[1].clone(),
@@ -619,10 +618,8 @@ fn where_clause(conditions: &[String]) -> String {
 }
 
 fn parse_count(rows: &[Vec<String>], label: &str) -> Result<u64, String> {
-    rows.first()
-        .and_then(|row| row.first())
-        .ok_or_else(|| format!("{label} row is missing"))
-        .and_then(|value| parse_u64(value, label))
+    let row = require_single_exact_row(rows, 1, label)?;
+    parse_u64(&row[0], label)
 }
 
 fn owned_filter(value: Option<&str>) -> Option<String> {

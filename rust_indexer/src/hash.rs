@@ -545,8 +545,8 @@ fn load_global_candidate_sizes(repo: &DbRepo) -> Result<HashSet<u64>, String> {
 
     rows.iter()
         .map(|row| {
-            row.first()
-                .ok_or_else(|| "global candidate-size row is empty".to_string())?
+            require_exact_row_columns(row, 1, "global candidate size")?;
+            row[0]
                 .trim()
                 .parse::<u64>()
                 .map_err(|err| format!("invalid global candidate size: {err}"))

@@ -943,3 +943,9 @@ FOD 3.4.488 changes three indexer readers from silently skipping short SQL
 rows to rejecting any result row whose width differs from the query projection.
 This prevents malformed hash-candidate, duplicate-set and import-plan results
 from appearing complete.
+FOD 3.4.489 extends exact projection-width checks across indexer source,
+catalogue, snapshot, hash, import-plan and cleanup decoders. Aggregate and
+single-object queries now require exactly one row and the expected column
+count; missing and duplicate rows are reported instead of silently selecting
+the first. All 35 `fod-indexer` unit tests passed, alongside `cargo check`,
+formatting and `make test-version`.

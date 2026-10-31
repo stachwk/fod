@@ -1,5 +1,6 @@
 use crate::db::sql_quote_literal;
 use crate::file_read_api;
+use crate::model::{require_exact_row_columns, require_single_exact_row};
 use crate::output::{
     CommandCapabilityView, IndexerCapabilitiesOutput, INDEXER_DEFAULT_PAGE_LIMIT,
     INDEXER_MAX_PAGE_LIMIT,
@@ -371,12 +372,7 @@ pub fn create_catalog_snapshot(
         FROM created
         "
     ))?;
-    let row = rows
-        .first()
-        .ok_or_else(|| "catalog snapshot create did not return a snapshot".to_string())?;
-    if row.len() < 9 {
-        return Err("catalog snapshot create row is too short".to_string());
-    }
+    let row = require_single_exact_row(&rows, 9, "catalog snapshot create")?;
     let snapshot = snapshot_from_row(&row[..7])?;
     let created_new = parse_bool(&row[7]);
     let copied_count = parse_u64(&row[8], "copied snapshot file count")?;
@@ -428,11 +424,8 @@ pub fn list_catalog_snapshots(
         "
     ))?;
     let total_rows = repo.query_rows_text("SELECT COUNT(*) FROM index_catalog_snapshots")?;
-    let total = total_rows
-        .first()
-        .and_then(|row| row.first())
-        .ok_or_else(|| "catalog snapshot total row is missing".to_string())
-        .and_then(|value| parse_u64(value, "catalog snapshot total"))?;
+    let total_row = require_single_exact_row(&total_rows, 1, "catalog snapshot total")?;
+    let total = parse_u64(&total_row[0], "catalog snapshot total")?;
     let mut items = rows
         .iter()
         .map(|row| snapshot_from_row(row))
@@ -483,13 +476,21 @@ pub fn delete_catalog_snapshot(
         RETURNING file_count::text
         "
     ))?;
-    let row = rows.first().ok_or_else(|| {
-        format!("catalog_snapshot_not_found: snapshot {snapshot_id} does not exist")
-    })?;
-    let deleted_file_count = row
-        .first()
-        .ok_or_else(|| "catalog snapshot delete row is too short".to_string())
-        .and_then(|value| parse_u64(value, "deleted snapshot file count"))?;
+    let row = match rows.as_slice() {
+        [] => {
+            return Err(format!(
+                "catalog_snapshot_not_found: snapshot {snapshot_id} does not exist"
+            ));
+        }
+        [_] => require_single_exact_row(&rows, 1, "catalog snapshot delete")?,
+        _ => {
+            return Err(format!(
+                "catalog snapshot delete returned {} rows",
+                rows.len()
+            ))
+        }
+    };
+    let deleted_file_count = parse_u64(&row[0], "deleted snapshot file count")?;
     Ok(CatalogSnapshotDeleteOutput {
         deleted: true,
         snapshot_id,
@@ -526,9 +527,20 @@ fn load_snapshot(repo: &DbRepo, snapshot_id: u64) -> Result<CatalogSnapshotView,
         LIMIT 1
         "
     ))?;
-    rows.first()
-        .ok_or_else(|| format!("catalog_snapshot_not_found: snapshot {snapshot_id} does not exist"))
-        .and_then(|row| snapshot_from_row(row))
+    match rows.as_slice() {
+        [] => Err(format!(
+            "catalog_snapshot_not_found: snapshot {snapshot_id} does not exist"
+        )),
+        [_] => snapshot_from_row(require_single_exact_row(
+            &rows,
+            7,
+            "catalog snapshot lookup",
+        )?),
+        _ => Err(format!(
+            "catalog snapshot lookup returned {} rows",
+            rows.len()
+        )),
+    }
 }
 
 fn ensure_snapshot_schema(repo: &DbRepo, operation: &str) -> Result<(), String> {
@@ -544,9 +556,13 @@ fn ensure_snapshot_schema(repo: &DbRepo, operation: &str) -> Result<(), String> 
                   AND column_name = 'request_token'
             )",
     )?;
-    let ready = rows.first().is_some_and(|row| {
-        row.len() >= 3 && parse_bool(&row[0]) && parse_bool(&row[1]) && parse_bool(&row[2])
-    });
+    let ready = match rows.as_slice() {
+        [row] => {
+            require_exact_row_columns(row, 3, "catalog snapshot schema check")?;
+            parse_bool(&row[0]) && parse_bool(&row[1]) && parse_bool(&row[2])
+        }
+        _ => false,
+    };
     if ready {
         Ok(())
     } else {
@@ -591,9 +607,7 @@ fn normalize_source_filter(source: Option<&str>) -> Result<Option<String>, Strin
 }
 
 fn snapshot_from_row(row: &[String]) -> Result<CatalogSnapshotView, String> {
-    if row.len() < 7 {
-        return Err("catalog snapshot row is too short".to_string());
-    }
+    require_exact_row_columns(row, 7, "catalog snapshot")?;
     Ok(CatalogSnapshotView {
         snapshot_id: parse_u64(&row[0], "catalog snapshot id")?,
         status: row[1].clone(),
@@ -777,9 +791,15 @@ pub fn show_snapshot_file(
         snapshot_id,
         file_id
     ))?;
-    let row = rows.first().ok_or_else(|| {
-        format!("indexed file {file_id} does not exist in catalogue snapshot {snapshot_id}")
-    })?;
+    let row = match rows.as_slice() {
+        [] => {
+            return Err(format!(
+                "indexed file {file_id} does not exist in catalogue snapshot {snapshot_id}"
+            ));
+        }
+        [_] => require_single_exact_row(&rows, 19, "snapshot indexed file")?,
+        _ => return Err(format!("snapshot file lookup returned {} rows", rows.len())),
+    };
     Ok(SnapshotFileShowOutput {
         consistency: "stored-snapshot",
         snapshot_id: Some(snapshot_id),
@@ -819,11 +839,8 @@ fn load_snapshot_file_catalog(
         "SELECT COUNT(*) FROM index_catalog_snapshot_files f WHERE {}",
         total_conditions.join(" AND ")
     ))?;
-    let total = total_rows
-        .first()
-        .and_then(|r| r.first())
-        .ok_or_else(|| "snapshot file total row is missing".to_string())
-        .and_then(|v| parse_u64(v, "snapshot file total"))?;
+    let total_row = require_single_exact_row(&total_rows, 1, "snapshot file total")?;
+    let total = parse_u64(&total_row[0], "snapshot file total")?;
 
     let mut items = rows
         .iter()
@@ -983,9 +1000,7 @@ fn snapshot_filters_empty(filters: &crate::read_api::FileCatalogFilters) -> bool
 }
 
 fn snapshot_file_item_from_row(row: &[String]) -> Result<crate::read_api::FileCatalogItem, String> {
-    if row.len() < 19 {
-        return Err("snapshot indexed file row is too short".to_string());
-    }
+    require_exact_row_columns(row, 19, "snapshot indexed file")?;
     let source_root = row[4].clone();
     let path = row[5].clone();
     let path_view = std::path::Path::new(&path);

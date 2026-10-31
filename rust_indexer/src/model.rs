@@ -335,8 +335,25 @@ pub(crate) fn require_exact_row_columns(
     Ok(())
 }
 
+pub(crate) fn require_single_exact_row<'a>(
+    rows: &'a [Vec<String>],
+    expected_columns: usize,
+    description: &str,
+) -> Result<&'a [String], String> {
+    if rows.len() != 1 {
+        return Err(format!(
+            "invalid {description} result: expected exactly 1 row, got {}",
+            rows.len()
+        ));
+    }
+    let row = &rows[0];
+    require_exact_row_columns(row, expected_columns, description)?;
+    Ok(row)
+}
+
 impl IndexSource {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
+        require_exact_row_columns(row, 4, "index source")?;
         Ok(Self {
             id_source: parse_u64(row_value(row, 0, "index source")?)?,
             name: row_value(row, 1, "index source")?.to_string(),
@@ -348,6 +365,7 @@ impl IndexSource {
 
 impl IndexedFile {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
+        require_exact_row_columns(row, 12, "indexed file")?;
         Ok(Self {
             id_file: parse_u64(row_value(row, 0, "indexed file")?)?,
             source_id: parse_u64(row_value(row, 1, "indexed file")?)?,
@@ -371,6 +389,7 @@ impl IndexedFile {
 
 impl FileHash {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
+        require_exact_row_columns(row, 9, "index file hash")?;
         Ok(Self {
             id_file: parse_u64(row_value(row, 0, "index file hash")?)?,
             hash_algorithm: row_value(row, 1, "index file hash")?.to_string(),
@@ -401,6 +420,7 @@ impl FileHash {
 
 impl DuplicateSet {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
+        require_exact_row_columns(row, 6, "duplicate set")?;
         Ok(Self {
             id_duplicate_set: parse_u64(row_value(row, 0, "duplicate set")?)?,
             hash_algorithm: row_value(row, 1, "duplicate set")?.to_string(),
@@ -414,7 +434,7 @@ impl DuplicateSet {
 
 #[cfg(test)]
 mod tests {
-    use super::require_exact_row_columns;
+    use super::{require_exact_row_columns, require_single_exact_row};
 
     #[test]
     fn exact_row_column_validator_rejects_short_and_extra_rows() {
@@ -422,5 +442,11 @@ mod tests {
         assert_eq!(require_exact_row_columns(&row, 2, "test row"), Ok(()));
         assert!(require_exact_row_columns(&row, 1, "test row").is_err());
         assert!(require_exact_row_columns(&row, 3, "test row").is_err());
+        assert_eq!(
+            require_single_exact_row(&[row.clone()], 2, "test row"),
+            Ok(row.as_slice())
+        );
+        assert!(require_single_exact_row(&[] as &[Vec<String>], 2, "test row").is_err());
+        assert!(require_single_exact_row(&[row.clone(), row], 2, "test row").is_err());
     }
 }

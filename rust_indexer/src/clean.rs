@@ -1,4 +1,4 @@
-use crate::model::{CleanSourceSummary, IndexSource, IndexedFile};
+use crate::model::{require_single_exact_row, CleanSourceSummary, IndexSource, IndexedFile};
 use crate::{hash, scan, source, source_registry};
 use fod_rust_hotpath::pg::DbRepo;
 use std::collections::BTreeSet;
@@ -144,12 +144,8 @@ fn count_plan_entries_to_delete(repo: &DbRepo, stale_file_ids: &[u64]) -> Result
                OR canonical_file_id IN ({ids})
             "
         ))?;
-        let row = rows
-            .first()
-            .ok_or_else(|| "cleanup plan entry count did not return a row".to_string())?;
-        let count = row
-            .first()
-            .ok_or_else(|| "cleanup plan entry count row is malformed".to_string())?
+        let row = require_single_exact_row(&rows, 1, "cleanup plan entry count")?;
+        let count = row[0]
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid cleanup plan entry count: {err}"))?;

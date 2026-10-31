@@ -1002,6 +1002,12 @@ Reading guide:
   reject malformed row widths. They previously skipped short rows, which could
   silently omit data from a hash report or import-plan response. A pure
   regression verifies both short and extra-column rows fail validation.
+  FOD 3.4.489 extends exact projection-width checks to the remaining indexer
+  row decoders and validates single-row query cardinality for counts, source
+  lookups, snapshot metadata and cleanup plan reads. The first-row helper is
+  no longer used to decode SQL results in the indexer. All 35
+  `fod-indexer` unit tests passed; `cargo check`, formatting and
+  `make test-version` passed as well.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a
