@@ -24,8 +24,9 @@ Reading guide:
   Linuksa, a nie stwierdzone naruszenie POSIX. Obsługa wymaga modelu aliasów
   symlinków w PostgreSQL oraz zgodnej tożsamości inode, `nlink`, lookup,
   readdir, rename, unlink i promocji aliasu po usunięciu wpisu źródłowego.
-  Zaprojektować transakcyjny model przed implementacją; nie utożsamiać linku do
-  symlinka z linkiem do jego celu.
+  Model transakcyjny i wymagane regresje opisuje
+  [`docs/SYMLINK_HARDLINK_DESIGN.md`](docs/SYMLINK_HARDLINK_DESIGN.md); nie
+  utożsamiać linku do symlinka z linkiem do jego celu.
 
 - [x] **`opendir()` nie może zwracać inode roota jako `d_ino` wpisu `..` po utracie mapy rodzica.**
   Callback brał inode rodzica wyłącznie z lokalnego cache ścieżek i w razie
