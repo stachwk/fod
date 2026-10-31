@@ -951,15 +951,8 @@ fn heartbeat_pg_mount_state(
     local_lock_owners: &Arc<Mutex<HashSet<u64>>>,
     lock_lease_ttl_seconds: u64,
 ) -> bool {
-    let mut failed = false;
-
-    let local_owners = match local_lock_owners.lock() {
-        Ok(guard) => guard.iter().copied().collect::<HashSet<_>>(),
-        Err(err) => {
-            warn!("FOD lock heartbeat skipped: poisoned owner set: {}", err);
-            return true;
-        }
-    };
+    let (local_owners, owner_set_poisoned) = snapshot_local_lock_owners(local_lock_owners);
+    let mut failed = owner_set_poisoned;
 
     for owner in local_owners.iter().copied() {
         if let Err(err) = repo.touch_client_session_owner_key(session_id, owner) {
@@ -1008,6 +1001,46 @@ fn heartbeat_pg_mount_state(
     }
 
     failed
+}
+
+fn snapshot_local_lock_owners(local_lock_owners: &Mutex<HashSet<u64>>) -> (HashSet<u64>, bool) {
+    match local_lock_owners.lock() {
+        Ok(guard) => (guard.iter().copied().collect(), false),
+        Err(err) => {
+            warn!("FOD lock heartbeat recovering poisoned owner set: {}", err);
+            (err.into_inner().iter().copied().collect(), true)
+        }
+    }
+}
+
+fn remove_local_lock_owner(local_lock_owners: &Mutex<HashSet<u64>>, owner: u64) {
+    match local_lock_owners.lock() {
+        Ok(mut guard) => {
+            guard.remove(&owner);
+        }
+        Err(err) => {
+            warn!(
+                "FOD lock owner cleanup recovering poisoned owner set owner={} err={}",
+                owner, err
+            );
+            err.into_inner().remove(&owner);
+        }
+    }
+}
+
+fn insert_local_lock_owner(local_lock_owners: &Mutex<HashSet<u64>>, owner: u64) {
+    match local_lock_owners.lock() {
+        Ok(mut guard) => {
+            guard.insert(owner);
+        }
+        Err(err) => {
+            warn!(
+                "FOD lock owner registration recovering poisoned owner set owner={} err={}",
+                owner, err
+            );
+            err.into_inner().insert(owner);
+        }
+    }
 }
 
 fn snapshot_posix_locks(
@@ -1070,9 +1103,7 @@ fn refresh_local_lock_owner_state(
         }
     };
     if !still_present {
-        if let Ok(mut guard) = local_lock_owners.lock() {
-            guard.remove(&owner);
-        }
+        remove_local_lock_owner(local_lock_owners, owner);
     }
 }
 
@@ -3515,9 +3546,7 @@ impl FodFuse {
     }
 
     fn register_local_lock_owner(&self, owner: u64) {
-        if let Ok(mut guard) = self.local_lock_owners.lock() {
-            guard.insert(owner);
-        }
+        insert_local_lock_owner(&self.local_lock_owners, owner);
         if self.lock_backend_is_pg() {
             if let Some(session_id) = self.session_id {
                 if let Err(err) = self.repo.touch_client_session_owner_key(session_id, owner) {
@@ -5564,9 +5593,7 @@ impl FodFuse {
                                 context, fh, owner, err
                             );
                         }
-                        if let Ok(mut guard) = self.local_lock_owners.lock() {
-                            guard.remove(&owner);
-                        }
+                        remove_local_lock_owner(&self.local_lock_owners, owner);
                         warn!(
                             "FOD {} recovered poisoned lock map by deleting PostgreSQL owner leases fh={} owner={}",
                             context, fh, owner
@@ -10972,7 +10999,7 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_local_lock_map_fails_closed_and_keeps_owner_heartbeat() {
+    fn poisoned_lock_state_fails_closed_and_keeps_heartbeats() {
         let posix_locks = Mutex::new(HashMap::from([(
             "file:7".to_string(),
             vec![super::PosixLockRecord {
@@ -11001,6 +11028,25 @@ mod tests {
         let local_lock_owners = Mutex::new(HashSet::from([41]));
         super::refresh_local_lock_owner_state(&posix_locks, &local_lock_owners, 41);
         assert!(local_lock_owners.lock().unwrap().contains(&41));
+
+        let owner_set = Mutex::new(HashSet::from([41]));
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = owner_set.lock().unwrap();
+            panic!("poison owner set for regression test");
+        }));
+        assert!(panic_result.is_err());
+        let (owners, poisoned) = super::snapshot_local_lock_owners(&owner_set);
+        assert!(poisoned);
+        assert!(owners.contains(&41));
+
+        super::insert_local_lock_owner(&owner_set, 42);
+        let (owners, poisoned) = super::snapshot_local_lock_owners(&owner_set);
+        assert!(poisoned);
+        assert!(owners.contains(&42));
+        super::remove_local_lock_owner(&owner_set, 42);
+        let (owners, poisoned) = super::snapshot_local_lock_owners(&owner_set);
+        assert!(poisoned);
+        assert!(!owners.contains(&42));
     }
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {

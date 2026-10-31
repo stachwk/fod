@@ -182,15 +182,16 @@ Reading guide:
 - [x] **Zatrucie lokalnego mutexa blokad nie może udawać braku blokad.**
   Odczyt lokalnej mapy blokad zwraca teraz `EIO`, gdy mutex jest zatruty,
   zamiast podawać pustą listę i dopuszczać dostęp bez sprawdzenia konfliktu.
-  Odświeżanie właściciela zachowuje go na liście heartbeatów przy zatrutym
-  mutexie. Heartbeat odzyskuje snapshot dostępnych wpisów przez `PoisonError` i
-  nadal odnawia ich lease w PostgreSQL, jednocześnie rejestrując błąd stanu.
+  Heartbeat odzyskuje snapshot blokad i zbiór właścicieli przez `PoisonError`,
+  odnawia dostępne lease w PostgreSQL i rejestruje błąd stanu. Rejestracja i
+  usuwanie właściciela również odzyskują zatruty zbiór zamiast go pomijać.
   Przy zamykaniu uchwytu ścieżka PostgreSQL usuwa wszystkie lease danego
   właściciela bezpośrednio z bazy, bo zatruta mapa lokalna nie jest wiarygodną
   listą zasobów do zwolnienia.
-  Deterministyczny test zatruwa mutex przez panic pod guardem, wymaga `EIO`
-  przy odczycie, potwierdza odzyskanie wpisu do heartbeat oraz zachowanie
-  właściciela. PostgreSQL pozostaje autorytatywnym źródłem blokad między mountami.
+  Deterministyczny test zatruwa oba mutexy przez panic pod guardem, wymaga `EIO`
+  przy odczycie mapy, potwierdza odzyskanie wpisu do heartbeat i poprawną
+  rejestrację/usunięcie właściciela. PostgreSQL pozostaje autorytatywnym źródłem
+  blokad między mountami.
 
 - [x] **`readlink()` nie może zwrócić celu nowego symlinka przez ścieżkę starego inode.**
   Callback używa ścieżki zapamiętanej dla inode, ale wcześniej sprawdzał tylko,
