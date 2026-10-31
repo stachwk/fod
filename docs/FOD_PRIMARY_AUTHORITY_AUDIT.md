@@ -1019,3 +1019,8 @@ FOD 3.4.498 factors the `mkfs` boolean-cell validation so its pure regression
 also rejects zero/multiple rows, extra columns, SQL NULL, a missing value
 pointer and malformed text. This verifies the whole scalar-result contract
 without relying on the live PostgreSQL endpoint.
+FOD 3.4.499 applies the shared positive-ID decoder to both PostgreSQL
+file-to-data-object metadata readers. A zero or negative backing-object ID now
+fails as a database result error rather than entering later copy/CRC or
+reference-count logic; the existing pure positive-ID regression and hotpath
+crate check pass.

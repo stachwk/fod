@@ -6729,11 +6729,8 @@ impl DbRepo {
                         if value.is_null() {
                             Err("file data_object_id value is missing".to_string())
                         } else {
-                            CStr::from_ptr(value)
-                                .to_string_lossy()
-                                .parse::<u64>()
-                                .map(Some)
-                                .map_err(|_| "invalid data_object_id value".to_string())
+                            let value = CStr::from_ptr(value).to_string_lossy();
+                            parse_positive_u64_text(&value, "file data_object_id").map(Some)
                         }
                     }
                 }
@@ -6766,10 +6763,7 @@ impl DbRepo {
             if values[1].trim().is_empty() {
                 return Err("missing data-object reference count".to_string());
             }
-            let data_object_id = values[0]
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| "invalid data_object_id value".to_string())?;
+            let data_object_id = parse_positive_u64_text(&values[0], "file data_object_id")?;
             let reference_count = values[1]
                 .trim()
                 .parse::<u64>()

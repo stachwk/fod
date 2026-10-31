@@ -2480,3 +2480,15 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   pointers and malformed text. This covers the shape checks independently of
   a live server. Unit targets, hotpath compilation and version checks pass;
   no database was used.
+
+## FOD 3.4.499 — reject non-positive data-object IDs in metadata reads
+
+- [x] Both `file_data_object_id_on_conn()` and
+  `file_data_object_info_on_conn()` now use the shared positive-ID decoder.
+  Previously, a corrupt `data_object_id=0` could be accepted as a valid backing
+  object. The existing decoder regression covers zero and negative IDs; the
+  hotpath unit test and crate check pass without a database.
+  Separately, the running PostgreSQL endpoint was checked with the custom
+  `/opt/postgresql-custom/bin/pg_config` (`--with-blocksize=32`) and the
+  configured FOD role reported `SHOW block_size=32768`; this change did not
+  run a database test.
