@@ -646,8 +646,11 @@ Reading guide:
   rejects NULL, empty, non-octal, or malformed result shapes. A Rust
   PostgreSQL regression checks missing/valid cases and injects empty and
   non-octal values into a file row, requiring errors to propagate. Broader
-  malformed-row fault injection, including NULL mode and query failure through
-  this exact lookup, remains open.
+  malformed-row fault injection remains open. The isolated PostgreSQL
+  regression `file_mode_lookup_rejects_null_mode_and_query_failure` now feeds
+  a NULL mode and then renames the queried column; the exact lookup returns an
+  error in both cases instead of reporting a missing file. The test uses a
+  disposable database and passed on FOD 3.4.416.
   Namespace ID decoders also reject zero: the logical root uses a separate
   sentinel, so zero is never a valid directory, file, hardlink or symlink row
   ID. `namespace_lookups_reject_zero_inode_ids` corrupts a symlink primary key

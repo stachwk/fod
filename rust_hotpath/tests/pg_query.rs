@@ -2426,6 +2426,46 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
 }
 
 #[test]
+fn file_mode_lookup_rejects_null_mode_and_query_failure() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let conninfo = conninfo_for_database(&temporary_db.name);
+    let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    drop(bootstrap_repo);
+    let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    repo.exec("ALTER TABLE fod.files ALTER COLUMN mode DROP NOT NULL")?;
+    repo.exec(
+        "INSERT INTO fod.data_objects (id_data_object, file_size, reference_count) VALUES (29, 0, 1)",
+    )?;
+    repo.exec(
+        "INSERT INTO fod.files (id_file, data_object_id, content_generation, id_directory, name, size, mode, uid, gid, inode_seed, unlinked, modification_date, access_date, change_date, creation_date) \
+         VALUES (17, 29, 1, NULL, 'mode_probe', 0, NULL, 1000, 1000, 'mode-probe-seed', FALSE, NOW(), NOW(), NOW(), NOW())",
+    )?;
+
+    let authority = repo.authoritative_view();
+    match authority.get_file_mode_value("/mode_probe") {
+        Err(error) if error.contains("NULL") => {}
+        Err(error) => return Err(format!("unexpected NULL-mode error: {error}")),
+        Ok(value) => return Err(format!("NULL file mode was accepted: {value:?}")),
+    }
+
+    repo.exec("ALTER TABLE fod.files RENAME COLUMN mode TO mode_fault_probe")?;
+    let error = authority
+        .get_file_mode_value("/mode_probe")
+        .expect_err("a failed mode lookup query must not look like a missing file");
+    if !error.contains("SQLSTATE 42703") {
+        return Err(format!(
+            "expected PostgreSQL undefined-column error with SQLSTATE 42703, got: {error}"
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn namespace_lookups_reject_zero_inode_ids() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
