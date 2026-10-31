@@ -65,6 +65,10 @@ FOD 3.4.486 extends strict row-shape validation to transactional chmod and
 timestamp authorization metadata. All 72 `pg_query` tests passed on an
 isolated current-schema database on the verified 32 KiB build. Continue the
 broader fault-injection audit.
+FOD 3.4.487 makes directory-entry metadata lookup reject multiple rows for
+one parent/name instead of selecting the first namespace kind. All 72
+`pg_query` tests passed on the verified 32 KiB PostgreSQL build. Continue the
+broader fault-injection audit.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

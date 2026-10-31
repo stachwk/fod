@@ -948,7 +948,6 @@ impl DbRepo {
             ) entries
             WHERE name = $2
             ORDER BY kind
-            LIMIT 1
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -956,11 +955,13 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let rows = fetch_rows_text(exec_params(conn, &sql, &[&parent_id, &name])?)?;
             let mut entries = parse_directory_entry_metadata_rows(rows)?;
-            Ok(if entries.is_empty() {
-                None
-            } else {
-                Some(entries.remove(0))
-            })
+            if entries.len() > 1 {
+                return Err(format!(
+                    "directory entry lookup returned {} rows for one name",
+                    entries.len()
+                ));
+            }
+            Ok(entries.pop())
         })
     }
 

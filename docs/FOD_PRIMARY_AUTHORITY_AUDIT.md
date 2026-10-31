@@ -933,3 +933,9 @@ being interpreted from its first row. All 72 `pg_query` tests passed on an
 isolated current-schema database after confirming PostgreSQL 16.15's
 `--with-blocksize=32` build and live `SHOW block_size=32768`; the temporary
 database was dropped.
+FOD 3.4.487 removes the arbitrary first-row selection from directory-entry
+metadata lookup. It now reports an error when multiple namespace kinds occupy
+the same parent/name; the duplicate-symlink regression covers this resolver.
+All 72 `pg_query` tests passed against a disposable current-schema PostgreSQL
+16.15 database after confirming `--with-blocksize=32` and live
+`SHOW block_size=32768`; the database was dropped afterward.

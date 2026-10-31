@@ -991,6 +991,13 @@ Reading guide:
   current-schema PostgreSQL 16.15 database after checking the custom
   `--with-blocksize=32` build and live `SHOW block_size=32768`; the disposable
   database was dropped afterward.
+  FOD 3.4.487 removes `LIMIT 1` from directory-entry metadata lookup and
+  returns an error if several namespace kinds claim the same parent/name.
+  `duplicate_symlink_namespace_rows_are_rejected` now checks this lookup in
+  addition to path and symlink resolution. All 72 `pg_query` tests passed on
+  the disposable current-schema database after verifying PostgreSQL 16.15's
+  `--with-blocksize=32` build and `SHOW block_size=32768`; the database was
+  dropped afterward.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

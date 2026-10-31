@@ -1350,6 +1350,17 @@ fn duplicate_symlink_namespace_rows_are_rejected() -> Result<(), String> {
                 "unexpected duplicate symlink lookup error: {symlink_error}"
             ));
         }
+        let metadata_error = repo
+            .directory_entry_metadata_for_id_and_name(None, &name)
+            .err()
+            .ok_or_else(|| {
+                "directory entry metadata accepted duplicate namespace rows".to_string()
+            })?;
+        if !metadata_error.contains("2 rows for one name") {
+            return Err(format!(
+                "unexpected duplicate directory entry metadata error: {metadata_error}"
+            ));
+        }
         let path_error = repo
             .resolve_path(&path)
             .err()
