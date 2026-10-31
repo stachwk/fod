@@ -2596,3 +2596,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   heartbeat, release or persistence queries. A caller-constructed lease or
   fence with token zero could otherwise be reported as merely stale. Formatting
   and hotpath compilation pass; no database operation was run.
+
+## FOD 3.4.510 — refuse cleanup of running imports
+
+- [x] Refuse `cleanup-failed` while an import plan remains
+  `materialize_running`. The plan-row lock did not stop an importer writing
+  through separate transactions, so cleanup could delete a partially created
+  tree while that importer continued. Automatic rollback sets
+  `materialize_failed` first and remains supported. Formatting and
+  `cargo check --offline -p fod-rust-indexer` pass. The direct regression for
+  refusal remains pending; durable recovery for crashed importers is tracked
+  in the unresolved finding at the top of this file.
