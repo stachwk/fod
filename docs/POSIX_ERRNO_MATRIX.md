@@ -21,6 +21,13 @@ passed on FOD 3.4.374 in `release-lto` against a fresh disposable PostgreSQL
 16.15 database on Linux 6.17/libfuse 3.17.4; details are recorded in
 [`TODO.md`](../TODO.md).
 
+In the FOD `open()` callback, a genuine ACL denial maps to `EACCES`, a failed
+PostgreSQL ACL read maps to `EIO`, and malformed stored ACL data preserves
+`EINVAL`. The focused unit regression
+`open_acl_check_preserves_backend_errors_and_maps_denial_to_eacces` checks this
+callback mapping; it does not substitute for a mounted PostgreSQL fault-injection
+case.
+
 | Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |
 | `open()` | `EACCES`, `EEXIST`, `EILSEQ` gdy `O_CREAT` nie może utworzyć nazwy nieprzenośnej, `EINTR`, `EISDIR`, `ELOOP`, `EMFILE`, `ENAMETOOLONG` dla komponentu dłuższego niż `NAME_MAX`, `ENFILE`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `ENXIO` (nieblokujący zapis do FIFO bez czytelnika), `EOVERFLOW`, `EROFS`; `EINVAL` jeśli podano flagi synchronizowanego I/O, których implementacja nie obsługuje | `EAGAIN` dla zablokowanego PTY (XSI); `EINVAL` dla nieprawidłowej opcji; `ELOOP` przy przekroczeniu `SYMLOOP_MAX`; `ENAMETOOLONG` dla `PATH_MAX`; `EOPNOTSUPP` dla socketu; `ETXTBSY` dla wykonywanego pliku | `O_EXCL`, tryby deskryptora i błędy ścieżek mają regresje w [`test_mount_suite.py`](../tests/integration/test_mount_suite.py), [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py), [`test_df.sh`](../tests/integration/test_df.sh) i [`test_mknod.py`](../tests/integration/test_mknod.py). Test w `test_path_trailing_slash.py` sprawdza `EILSEQ` i brak aliasowania nie-UTF-8 nazwy. Istniejąca regresja montowana potwierdza `EMFILE` dla `opendir()` przy wyczerpanym limicie procesu. Test źródłowy rozszerzono o `open()` istniejącego katalogu w tym samym stanie; ten nowy assertion nie został jeszcze uruchomiony na mouncie. `ENFILE`, `EINTR` i `EOVERFLOW` nadal nie mają osobnych regresji. |

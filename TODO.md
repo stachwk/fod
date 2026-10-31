@@ -737,7 +737,13 @@ Reading guide:
   both now distinguish a corrupt value from zero rows. The regression
   `null_file_size_is_not_reported_as_missing_file` covers both query routes and
   confirms that a purged file still returns `None`.
-  Other malformed/missing rows remain pending.
+  Other malformed/missing rows remain pending. The `open()` callback also used
+  to collapse every `acl_allows()` error into `EACCES`; it now preserves backend
+  `EIO` and malformed-ACL `EINVAL`, while a genuine ACL denial remains
+  `EACCES`. The focused unit regression
+  `open_acl_check_preserves_backend_errors_and_maps_denial_to_eacces` covers
+  all outcomes. Broader PostgreSQL fault-injection and malformed-row regressions
+  remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values. A backend regression now seeds an

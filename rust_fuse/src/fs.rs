@@ -3164,6 +3164,14 @@ impl FodFuse {
         }
     }
 
+    fn require_acl_access(result: Result<bool, libc::c_int>) -> Result<(), libc::c_int> {
+        match result {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(EACCES),
+            Err(errno) => Err(errno),
+        }
+    }
+
     fn acl_allows_for_attrs(
         &self,
         attrs: &ParsedAttrs,
@@ -7045,17 +7053,16 @@ impl Filesystem for FodFuse {
             libc::O_RDWR => libc::R_OK | libc::W_OK,
             _ => libc::R_OK,
         };
-        if !self
-            .acl_allows(&path, &attrs, access_mode, &subject)
-            .unwrap_or(false)
+        if let Err(errno) =
+            Self::require_acl_access(self.acl_allows(&path, &attrs, access_mode, &subject))
         {
             self.log_request_error(
                 req_id,
                 "open",
-                EACCES,
-                format!("path={} denied_by_acl flags={:#x}", path, flags),
+                errno,
+                format!("path={} acl_check flags={:#x}", path, flags),
             );
-            fuse_reply_error!(reply, EACCES);
+            fuse_reply_error!(reply, errno);
             return;
         }
         if self.read_only
@@ -10910,6 +10917,23 @@ mod tests {
         assert_eq!(
             crate::errno::namespace_mutation_errno(rust_hotpath::pg::PARENT_ACCESS_DENIED),
             crate::errno::EACCES
+        );
+    }
+
+    #[test]
+    fn open_acl_check_preserves_backend_errors_and_maps_denial_to_eacces() {
+        assert_eq!(FodFuse::require_acl_access(Ok(true)), Ok(()));
+        assert_eq!(
+            FodFuse::require_acl_access(Ok(false)),
+            Err(crate::errno::EACCES)
+        );
+        assert_eq!(
+            FodFuse::require_acl_access(Err(crate::errno::EIO)),
+            Err(crate::errno::EIO)
+        );
+        assert_eq!(
+            FodFuse::require_acl_access(Err(crate::errno::EINVAL)),
+            Err(crate::errno::EINVAL)
         );
     }
 

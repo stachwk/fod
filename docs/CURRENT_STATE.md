@@ -57,6 +57,9 @@ the eight other `mount_smoke` tests matching `concurrent_` passed in
 `release-lto` against a fresh disposable PostgreSQL database on 2026-10-30.
 The permissions regression invokes libc `opendir()` as `nobody` on a mode-000
 directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
+The FUSE `open()` callback keeps ACL denial (`EACCES`) distinct from failed
+ACL metadata reads (`EIO`) and malformed stored ACL data (`EINVAL`); a focused
+unit regression covers this mapping.
 
 Logical-task admission has multithreaded unit coverage for FIFO order, capacity
 limits, queue progress as tasks finish, and balanced completion/failure metrics.
