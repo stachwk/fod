@@ -364,6 +364,10 @@ CREATE TABLE IF NOT EXISTS index_import_plans (
     request_token TEXT NOT NULL UNIQUE,
     dry_run BOOLEAN NOT NULL DEFAULT TRUE,
     source_filter TEXT,
+    materialize_fencing_token BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_materialize_fencing_token_nonnegative_check
+            CHECK (materialize_fencing_token >= 0),
+    materialize_lease_expires_at TIMESTAMPTZ,
     scanned_file_count BIGINT NOT NULL DEFAULT 0
         CONSTRAINT index_import_plans_scanned_files_nonnegative_check CHECK (scanned_file_count >= 0),
     candidate_group_count BIGINT NOT NULL DEFAULT 0

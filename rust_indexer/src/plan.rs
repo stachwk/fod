@@ -9,7 +9,9 @@ use crate::output::{
     ImportPlanSnapshot,
 };
 use crate::source;
-use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow, IndexImportPlanStageRow};
+use fod_rust_hotpath::pg::{
+    DbRepo, IndexImportPlanEntryStageRow, IndexImportPlanStageRow, MaterializationFence,
+};
 use fod_rust_runtime::request_token;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -142,6 +144,13 @@ pub(crate) fn insert_import_plan(
     })
 }
 
+pub(crate) fn insert_materialize_import_plan(
+    repo: &DbRepo,
+    source_filter: &str,
+) -> Result<MaterializationFence, String> {
+    repo.insert_materialize_import_plan(&request_token("materialize"), source_filter)
+}
+
 pub(crate) fn update_import_plan(
     repo: &DbRepo,
     plan_id: u64,
@@ -175,6 +184,54 @@ pub(crate) fn update_import_plan(
         saved_bytes = summary.saved_bytes,
         plan_id = plan_id,
     );
+    if let Some(fence) = repo.materialization_fence() {
+        if fence.plan_id != plan_id {
+            return Err("FOD_INDEXER_MATERIALIZE_FENCE_PLAN_MISMATCH".to_string());
+        }
+        let fenced_sql = format!(
+            "UPDATE index_import_plans
+             SET status = {},
+                 dry_run = {},
+                 scanned_file_count = {},
+                 candidate_group_count = {},
+                 confirmed_group_count = {},
+                 unique_payload_count = {},
+                 total_source_bytes = {},
+                 estimated_import_bytes = {},
+                 saved_bytes = {},
+                 materialize_lease_expires_at = CASE WHEN {} = 'materialize_running'
+                     THEN clock_timestamp() + INTERVAL '60 seconds' ELSE NULL END,
+                 updated_at = clock_timestamp()
+             WHERE id_import_plan = {}
+               AND status = 'materialize_running'
+               AND materialize_fencing_token = {}
+               AND materialize_lease_expires_at > clock_timestamp()
+             RETURNING id_import_plan",
+            sql_quote_literal(status),
+            if dry_run { "TRUE" } else { "FALSE" },
+            summary.scanned_files,
+            summary.candidate_duplicate_groups,
+            summary.confirmed_duplicate_groups,
+            summary.unique_payload_count,
+            summary.total_source_bytes,
+            summary.estimated_import_bytes,
+            summary.saved_bytes,
+            sql_quote_literal(status),
+            plan_id,
+            fence.fencing_token,
+        );
+        return repo.with_transaction(|tx| {
+            let rows = tx.query_rows_text(&fenced_sql)?;
+            if rows.len() == 1 && rows[0].len() == 1 && rows[0][0].trim() == plan_id.to_string() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "FOD_INDEXER_MATERIALIZE_FENCE_LOST plan_id={plan_id} fencing_token={}",
+                    fence.fencing_token
+                ))
+            }
+        });
+    }
     repo.exec(&sql)
 }
 

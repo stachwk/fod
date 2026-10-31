@@ -31,20 +31,19 @@ Reading guide:
   jeszcze uruchomione. Nie-UTF-8 mountpoint musi zostać odrzucony przed
   rejestracją sesji. Nie używać stratnej konwersji do naprawiania danych z bazy.
 
-- [ ] **Bezpiecznie odzyskiwać import pozostawiony w `materialize_running`.**
-  `cleanup-failed` odmawia usunięcia drzewa, gdy plan pozostaje
-  `materialize_running`. FOD 3.4.515 obejmuje już błędy setupu po zapisaniu
-  planu wspólną ścieżką rollback, ale twarde zakończenie procesu nadal może
-  pozostawić częściowy import w tym stanie. Zaprojektować trwały
-  lease/właściciela planu z fencing tokenem i kontrolowanym przejęciem po
-  potwierdzeniu braku aktywnego importera. Każda mutacja importu musi
-  weryfikować token w tej samej transakcji PostgreSQL co zapis. Sam timeout,
-  PID lub advisory lock na jednym pooled connection nie wystarcza: importer
-  wykonuje kolejne operacje na różnych połączeniach, a lease może wygasnąć
-  podczas pauzy procesu albo po failover. Nie zmieniać ręcznie statusu planu
-  bez potwierdzenia, że żaden importer go nie wykonuje. Dodać regresje setup
-  failure, aktywnego planu, wygasłego właściciela i starego fencing tokenu.
-  Szczegóły ryzyka TX-03C w
+- [ ] **Zweryfikować odzyskiwanie importu pozostawionego w `materialize_running`.**
+  FOD 3.4.519 dodaje schemat 39 z tokenem fencingowym i lease'em; tworzenie
+  katalogów, plików, payloadów, adopcja współdzielonych payloadów, staging
+  wpisów i terminalna zmiana statusu odświeżają i sprawdzają właściciela w tej
+  samej transakcji co zapis. `cleanup-failed` może atomowo przejąć wyłącznie
+  wygasły plan, zwiększyć token i usunąć częściowe drzewo w tej samej
+  transakcji. Trwająca mutacja trzyma blokadę wiersza planu, więc cleanup
+  poczeka na jej commit; wznowiony proces ze starym tokenem nie przejdzie
+  kolejnego zapisu. Plany `materialize_running` sprzed migracji, bez lease'u,
+  pozostają celowo nieprzejmowalne automatycznie. Implementacja jest
+  skompilowana, ale regresje setup failure, aktywnego planu, wygasłego
+  właściciela, starego tokenu i równoległego przejęcia nie zostały jeszcze
+  uruchomione. Szczegóły TX-03C w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
 - [ ] **Uruchomić regresję współbieżnej adopcji i cleanup licznika obiektu.**

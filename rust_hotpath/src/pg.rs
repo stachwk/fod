@@ -4169,9 +4169,18 @@ pub struct DbRepo {
     pool: Arc<SharedConnectionPool>,
     payload_observability: Arc<DbRepoPayloadObservability>,
     global_payload_observability: Arc<DbRepoPayloadObservability>,
+    materialization_fence: Option<MaterializationFence>,
     lock_session_id: Mutex<i64>,
     lock_schema_ready: Mutex<bool>,
     owner_session_cache: Mutex<HashMap<u64, i64>>,
+}
+
+/// Durable owner identity for one indexer materialization plan. Every import
+/// mutation must validate this token inside the transaction that changes data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaterializationFence {
+    pub plan_id: u64,
+    pub fencing_token: u64,
 }
 
 /// Operations in a single PostgreSQL transaction, pinned to one PGconn.
@@ -4215,6 +4224,7 @@ impl Clone for DbRepo {
             pool: Arc::clone(&self.pool),
             payload_observability: Arc::clone(&self.payload_observability),
             global_payload_observability: Arc::clone(&self.global_payload_observability),
+            materialization_fence: self.materialization_fence,
             lock_session_id: Mutex::new(
                 self.lock_session_id
                     .lock()
@@ -5229,6 +5239,48 @@ fn validate_write_ownership_lease_tokens(lease: WriteOwnershipLease) -> Result<(
 }
 
 impl DbRepo {
+    /// Return a clone whose import mutations are bound to one durable plan
+    /// owner. The owner is checked and its lease renewed inside each mutation
+    /// transaction, so separate pool checkouts cannot escape the fence.
+    pub fn with_materialization_fence(&self, fence: MaterializationFence) -> Self {
+        let mut repo = self.clone();
+        repo.materialization_fence = Some(fence);
+        repo
+    }
+
+    pub fn materialization_fence(&self) -> Option<MaterializationFence> {
+        self.materialization_fence
+    }
+
+    fn validate_materialization_fence_on_conn(&self, conn: *mut PGconn) -> Result<(), String> {
+        let Some(fence) = self.materialization_fence else {
+            return Ok(());
+        };
+        if fence.plan_id == 0 || fence.fencing_token == 0 {
+            return Err("FOD_INDEXER_MATERIALIZE_FENCE_INVALID".to_string());
+        }
+        let sql = CString::new(format!(
+            "UPDATE index_import_plans \
+             SET materialize_lease_expires_at = clock_timestamp() + INTERVAL '60 seconds', \
+                 updated_at = clock_timestamp() \
+             WHERE id_import_plan = {} \
+               AND status = 'materialize_running' \
+               AND materialize_fencing_token = {} \
+               AND materialize_lease_expires_at > clock_timestamp() \
+             RETURNING id_import_plan",
+            fence.plan_id, fence.fencing_token
+        ))
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let rows = unsafe { query_rows_text_on_conn(conn, &sql)? };
+        if rows.len() != 1 || rows[0].len() != 1 || rows[0][0].trim() != fence.plan_id.to_string() {
+            return Err(format!(
+                "FOD_INDEXER_MATERIALIZE_FENCE_LOST plan_id={} fencing_token={}",
+                fence.plan_id, fence.fencing_token
+            ));
+        }
+        Ok(())
+    }
+
     /// Use the main authority pool for mutation preconditions instead of the
     /// optional replica read pool. The configured authority itself is unchanged.
     pub fn authoritative_view(&self) -> Self {
@@ -5485,6 +5537,7 @@ impl DbRepo {
             )),
             payload_observability,
             global_payload_observability,
+            materialization_fence: None,
             lock_session_id: Mutex::new(NEXT_LOCK_SESSION_ID.fetch_sub(1, Ordering::Relaxed)),
             lock_schema_ready: Mutex::new(false),
             owner_session_cache: Mutex::new(HashMap::new()),
@@ -12959,6 +13012,7 @@ impl DbRepo {
         let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                self.validate_materialization_fence_on_conn(conn)?;
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
                     if inherit_default_acl {
@@ -13023,6 +13077,7 @@ impl DbRepo {
                     let params = [&parent_id];
                     exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
+                self.validate_materialization_fence_on_conn(conn)?;
                 Ok(value)
             });
             result
@@ -13166,6 +13221,7 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                self.validate_materialization_fence_on_conn(conn)?;
                 for serialization_key in &serialization_keys {
                     Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
                 }
@@ -13259,6 +13315,7 @@ impl DbRepo {
                     let params = [&parent_id];
                     exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
+                self.validate_materialization_fence_on_conn(conn)?;
                 Ok(value)
             });
             result
@@ -14198,6 +14255,7 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             let transaction_started = Instant::now();
             let result = transactional_replayable(conn, |conn| {
+                self.validate_materialization_fence_on_conn(conn)?;
                 // Indexer/legacy import is unfenced. Hold the same file-level
                 // advisory lock as ordinary fenced writers through COMMIT.
                 self.reject_unfenced_write_during_active_lease_on_conn(conn, file_id)?;
@@ -14216,7 +14274,8 @@ impl DbRepo {
                 // query relies on seeing writers committed while this
                 // transaction waited for the advisory lock.
                 let quota_lock = self.lock_payload_quota_on_conn(conn)?;
-                self.enforce_payload_quota_on_conn(conn, &quota_lock, None)
+                self.enforce_payload_quota_on_conn(conn, &quota_lock, None)?;
+                self.validate_materialization_fence_on_conn(conn)
             });
             self.record_persist_transaction_elapsed(transaction_started.elapsed(), result.is_err());
             result
@@ -15070,6 +15129,7 @@ impl DbRepo {
                     Ok(None)
                 },
                 |conn| {
+                    self.validate_materialization_fence_on_conn(conn)?;
                     // Adoption changes the destination's data-object pointer,
                     // so serialize it with writes to both inodes. Locking the
                     // source is essential: otherwise a source write could see
@@ -15156,6 +15216,7 @@ impl DbRepo {
                         exec_command_params(conn, &sql_touch_dst_object, &params)?;
                     }
 
+                    self.validate_materialization_fence_on_conn(conn)?;
                     Ok(true)
                 },
             )

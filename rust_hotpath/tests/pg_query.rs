@@ -101,7 +101,7 @@ fn repo_with_temporary_current_schema() -> Result<(TemporaryDatabase, DbRepo), S
     bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
     bootstrap_repo.exec("TRUNCATE TABLE fod.schema_version")?;
     bootstrap_repo
-        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (39, NOW())")?;
     drop(bootstrap_repo);
 
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
@@ -140,7 +140,7 @@ fn older_schema_is_rejected_before_current_statements_are_prepared() -> Result<(
         .and_then(|repo| repo.schema_version().map(|_| ()));
     match repo_result {
         Err(error)
-            if error.contains("requires database schema 38")
+            if error.contains("requires database schema 39")
                 && error.contains("database schema is 31")
                 && !error.contains("SQLSTATE 42P01") =>
         {
@@ -770,7 +770,7 @@ fn hardlink_creation_rejects_a_removed_source_namespace_binding() -> Result<(), 
     let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
     bootstrap_repo
-        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (39, NOW())")?;
     drop(bootstrap_repo);
 
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
@@ -2944,7 +2944,7 @@ fn file_mode_lookup_rejects_null_mode_and_query_failure() -> Result<(), String> 
     let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
     bootstrap_repo
-        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (39, NOW())")?;
     drop(bootstrap_repo);
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     repo.exec("ALTER TABLE fod.files ALTER COLUMN mode DROP NOT NULL")?;
@@ -3303,7 +3303,7 @@ fn register_file_open_lease_distinguishes_missing_file_and_session() -> Result<(
     let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
     bootstrap_repo
-        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (39, NOW())")?;
     drop(bootstrap_repo);
 
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
@@ -3717,7 +3717,7 @@ fn schema_below_client_floor_is_rejected_before_data_object_mutation() -> Result
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     match repo.create_data_object(4096, Some("legacy-hash-schema-gate")) {
         Err(error)
-            if error.contains("requires database schema 38")
+            if error.contains("requires database schema 39")
                 && error.contains("database schema is 5") =>
         {
             Ok(())

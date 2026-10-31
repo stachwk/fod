@@ -268,7 +268,7 @@ pełna ocena lock order na namespace/data objects.
 
 ## Reguły przejścia do C10-B3
 
-### TX-03C — odmowa cleanup aktywnego planu
+### TX-03C — cleanup aktywnego planu i recovery po crashu
 
 Przegląd kodu 2026-10-31 wykazał, że `cleanup_failed_materialization()`
 dopuszczał status `materialize_running`. Blokada `FOR UPDATE` na wierszu planu
@@ -279,46 +279,51 @@ FOD 3.4.510 odmawia teraz cleanup dla `materialize_running` i zwraca
 nadal działa, bo najpierw zapisuje `materialize_failed`. Odczyt i decyzja o
 statusie pozostają w tej samej transakcji PostgreSQL.
 
-To zamyka wyścig ręcznego cleanup z importerem, który nadal pracuje; nie
-rozwiązuje odzyskiwania po awarii procesu, który pozostawił plan w stanie
-`materialize_running`. Do tego potrzebny jest trwały lease importu i
-kontrolowane przejęcie po jego wygaśnięciu. Regresja bezpośrednio sprawdzająca
-odmowę dla aktywnego planu pozostaje do dodania i uruchomienia.
+Powyższa odmowa zamknęła wyścig ręcznego cleanup z importerem, który nadal
+pracuje. W pierwotnym stanie nie rozwiązywała jednak odzyskiwania po awarii
+procesu, który pozostawił plan w `materialize_running`; tę lukę adresuje
+implementacja FOD 3.4.519 opisana niżej. Regresja bezpośrednio sprawdzająca
+odmowę dla planu z nieodgasłym lease'em nadal pozostaje do uruchomienia.
 
 FOD 3.4.515 przenosi `ensure_root_directory()` i `load_block_size()` do tej
 samej obsługi błędu co tworzenie plików. Błąd tych kroków po zapisaniu planu
-próbuje teraz zapisać `materialize_failed` i wywołać cleanup. To zamyka zwykłe
-błędy setupu, ale nie odzyskuje planu po nagłym zakończeniu procesu. Nadal
-potrzebne są regresje dla błędu setupu i aktywnego planu oraz osobny protokół
-lease/odzyskiwania po crashu.
+próbuje zapisać `materialize_failed` i wywołać cleanup.
 
-Wymaganie dla przyszłego odzyskiwania: `materialize_source()` wykonuje mutacje
-przez kolejne metody `DbRepo`, które niezależnie pobierają połączenie z puli.
-Blokada sesyjna na jednym połączeniu nie dowodzi więc, że kolejne mutacje są
-chronione tą blokadą. Sam czas wygaśnięcia także nie może autoryzować cleanup:
-proces może być wstrzymany, a potem wznowić zapis po przejęciu planu. Właściciel
-musi otrzymać fencing token, a każda mutacja importu musi sprawdzić ten token
-w tej samej transakcji co zmianę namespace/payloadu. Przejęcie cleanup musi
-atomowo zmienić token/status w PostgreSQL; stare tokeny mają być odrzucane.
-Odzyskiwanie wymaga regresji wielotransakcyjnej obejmującej wygasły plan,
-wznowienie starego właściciela i równoległe przejęcie przez cleanup.
+FOD 3.4.519 dodaje migrację 0039 i trwały lease z monotonicznym tokenem
+fencingowym. Plan importu dostaje token 1 i lease 60 sekund przy insercie.
+Każda transakcja zapisująca katalog, plik, payload, adopcję payloadu lub
+podsumowanie odświeża lease przez warunkowy `UPDATE` wiersza planu. Ten
+`UPDATE` blokuje wiersz do końca transakcji, więc przejęcie nie może wyprzedzić
+już rozpoczętego zapisu. Terminalna zmiana statusu również wymaga aktualnego
+tokena i nieodgasłego lease'u. Po wygaśnięciu `cleanup-failed` podnosi token,
+ustawia `materialize_failed` i usuwa drzewo w jednej transakcji; wznowiony
+importer zostaje odrzucony przy następnym zapisie. Plan sprzed migracji z
+`materialize_running`, tokenem 0 i brakiem lease'u pozostaje nieprzejmowalny,
+żeby nie uznać starego aktywnego importera za martwy proces.
+
+Kod i migracja przeszły kompilację Cargo dla hotpath, indexera i mkfs. Nie
+uruchomiono regresji setup failure, aktywnego planu, wygasłego właściciela,
+starego tokena ani współbieżnego przejęcia; TX-03C pozostaje otwarte do
+walidacji runtime na izolowanej bazie. Test wymaga schematu 39 oraz PostgreSQL
+FOD `BLCKSZ=32KiB`.
 
 Źródłowa mapa mutacji do objęcia tokenem:
 
 | Etap | Wywołania w `materialize.rs` | Granica, która musi sprawdzić fencing token |
 | --- | --- | --- |
-| Utworzenie planu i właściciela | `plan::insert_import_plan()` | Utworzenie planu `materialize_running` i pierwszego tokenu właściciela w jednej transakcji |
-| Katalog importu i podkatalogi | `ensure_root_directory()`, `ensure_directory_chain()` → `DbRepo::create_directory()` | Transakcja tworząca każdy katalog |
-| Plik kanoniczny i referencje | `materialize_canonical_file()`, `materialize_reference_file()` → `DbRepo::create_file()` | Transakcja tworząca każdy wpis pliku |
-| Zapis payloadu kanonicznego | `persist_file_blocks_from_path()` | Każda transakcja zapisująca bloki/rozmiar; wcześniejszy check nie wystarczy dla wieloczęściowego zapisu |
-| Adopcja payloadu dla duplikatu | `adopt_source_data_object()` | Transakcja zmieniająca referencję pliku i liczniki obiektu |
-| Zapis podsumowania planu | `upsert_index_import_plan_entries_staged()` | Transakcja stagingu musi sprawdzić właściciela, a nie tylko istniejący `plan_id` |
-| Zakończenie i obsługa błędu | `plan::update_import_plan()` oraz `cleanup_failed_materialization()` | Zmiana statusu/cleanup muszą warunkować się tym samym tokenem; stary proces nie może oznaczyć przejętego planu jako failed/completed |
+| Utworzenie planu i właściciela | `plan::insert_materialize_import_plan()` | Insert tworzy plan `materialize_running`, token 1 i lease razem |
+| Katalog importu i podkatalogi | `ensure_root_directory()`, `ensure_directory_chain()` → `DbRepo::create_directory()` | Każda transakcja tworząca katalog odnawia i weryfikuje fence |
+| Plik kanoniczny i referencje | `materialize_canonical_file()`, `materialize_reference_file()` → `DbRepo::create_file()` | Każda transakcja tworząca plik odnawia i weryfikuje fence |
+| Zapis payloadu kanonicznego | `persist_file_blocks_from_path()` | Transakcja zapisująca bloki/rozmiar sprawdza fence; zapis payloadu jest transakcyjny |
+| Adopcja payloadu dla duplikatu | `adopt_source_data_object()` | Transakcja zmieniająca referencję pliku i liczniki obiektu sprawdza fence |
+| Zapis podsumowania planu | `upsert_index_import_plan_entries_staged()` | Transakcja stagingu sprawdza właściciela, a nie tylko istniejący `plan_id` |
+| Zakończenie i obsługa błędu | `plan::update_import_plan()` oraz `cleanup_failed_materialization()` | Status terminalny wymaga aktualnego tokena; odzyskiwanie wygasłego planu inkrementuje token i sprząta w jednej transakcji |
 
-Lista wynika z bieżącego kodu. Każdy `DbRepo` może pobierać kolejne połączenie
-z puli, dlatego token trzeba przekazać do granicy SQL transakcji każdej mutacji;
-lokalny wrapper w `materialize_source()` albo heartbeat właściciela sam w sobie
-nie obejmie powyższych commitów.
+Każdy `DbRepo` może pobierać kolejne połączenie z puli. Dlatego materializer
+przekazuje fence w scoped `DbRepo`, ale autoryzacja nie opiera się na lokalnym
+wrapperze: każda wymieniona metoda wykonuje warunkowy zapis wiersza planu w tej
+samej transakcji co własną mutację. Procesowa blokada lub osobny heartbeat nie
+zastąpiłyby tych kontroli.
 
 ### TX-03D — wyścig licznika współdzielonego obiektu (poprawka, test otwarty)
 

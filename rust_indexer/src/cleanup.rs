@@ -342,14 +342,38 @@ pub fn cleanup_failed_materialization(
     plan_id: u64,
 ) -> Result<CleanupFailedSummary, String> {
     repo.with_transaction(|tx| {
-        let plan = load_cleanup_plan(tx, plan_id)?;
-        match plan.status.as_str() {
-            "materialize_failed" | "materialize_cleaned" => {}
-            "materialize_running" => {
+        let mut plan = load_cleanup_plan(tx, plan_id)?;
+        let status_before = plan.status.clone();
+        if plan.status == "materialize_running" {
+            let claimed = tx.query_rows_text(&format!(
+                "UPDATE index_import_plans
+                 SET status = 'materialize_failed',
+                     materialize_fencing_token = materialize_fencing_token + 1,
+                     materialize_lease_expires_at = NULL,
+                     updated_at = clock_timestamp()
+                 WHERE id_import_plan = {plan_id}
+                   AND status = 'materialize_running'
+                   AND materialize_fencing_token > 0
+                   AND materialize_lease_expires_at <= clock_timestamp()
+                 RETURNING id_import_plan"
+            ))?;
+            if claimed.len() == 1
+                && claimed[0].len() == 1
+                && claimed[0][0].trim() == plan_id.to_string()
+            {
+                // The row lock acquired by load_cleanup_plan is held until the
+                // namespace cleanup commits. A resumed importer has the old
+                // token and cannot pass its next mutation fence check.
+                plan.status = "materialize_failed".to_string();
+            } else {
                 return Err(format!(
-                    "FOD_INDEXER_CLEANUP_ACTIVE_MATERIALIZER plan {plan_id} is still running; cleanup refused"
+                    "FOD_INDEXER_CLEANUP_ACTIVE_MATERIALIZER plan {plan_id} has an unexpired or legacy lease; cleanup refused"
                 ));
             }
+        }
+        match plan.status.as_str() {
+            "materialize_failed" | "materialize_cleaned" => {}
+            "materialize_running" => unreachable!("running plan must be claimed or rejected"),
             "materialize_completed" => {
                 return Err(format!(
                     "plan {plan_id} is already completed and cannot be cleaned"
@@ -509,7 +533,7 @@ pub fn cleanup_failed_materialization(
             removed_directories,
             exclusive_data_objects_removed,
             shared_data_objects_preserved,
-            plan_status_before: plan.status,
+            plan_status_before: status_before,
             plan_status_after: "materialize_cleaned".to_string(),
         })
     })

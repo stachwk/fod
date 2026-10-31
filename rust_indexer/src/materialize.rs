@@ -411,12 +411,9 @@ pub fn materialize_source(
         })
         .collect();
 
-    let plan_id = plan::insert_import_plan(
-        repo,
-        "materialize_running",
-        false,
-        Some(source.name.as_str()),
-    )?;
+    let fence = plan::insert_materialize_import_plan(repo, &source.name)?;
+    let plan_id = fence.plan_id;
+    let fenced_repo = repo.with_materialization_fence(fence);
     let root_name = plan::import_root_name(source.id_source, plan_id);
     let scanned_files = groups.values().map(|members| members.len() as u64).sum();
     let source_bytes = groups
@@ -442,12 +439,12 @@ pub fn materialize_source(
 
     let result = (|| -> Result<(), String> {
         // From the moment the durable plan is marked running, every fallible
-        // setup step must use the same failure/rollback path as file creation.
-        // Otherwise a root-directory or configuration error strands the plan
-        // in materialize_running and leaves cleanup permanently blocked.
-        let (root_id, root_created) = ensure_root_directory(repo, &source, &root_name)?;
+        // setup step uses the same failure/rollback path as file creation.
+        // That avoids waiting for lease expiry before ordinary setup failures
+        // can be cleaned up.
+        let (root_id, root_created) = ensure_root_directory(&fenced_repo, &source, &root_name)?;
         summary.created_directories = summary.created_directories.saturating_add(root_created);
-        let block_size = load_block_size(repo)?;
+        let block_size = load_block_size(&fenced_repo)?;
 
         for ((algorithm, full_hash_hex, file_size), mut members) in groups {
             members.sort_by(|left, right| {
@@ -465,7 +462,7 @@ pub fn materialize_source(
                 .first()
                 .expect("group must contain at least one file");
             let (canonical_file_id, created_dirs) = materialize_canonical_file(
-                repo,
+                &fenced_repo,
                 &source,
                 &root_name,
                 root_id,
@@ -497,7 +494,7 @@ pub fn materialize_source(
 
             for reference in members.iter().skip(1) {
                 let created_dirs = materialize_reference_file(
-                    repo,
+                    &fenced_repo,
                     &source,
                     &root_name,
                     root_id,
@@ -552,22 +549,22 @@ pub fn materialize_source(
 
     match result {
         Ok(()) => {
-            if let Err(err) = repo.upsert_index_import_plan_entries_staged(&staged_rows) {
-                return rollback_materialize_failure(repo, plan_id, &summary, err);
+            if let Err(err) = fenced_repo.upsert_index_import_plan_entries_staged(&staged_rows) {
+                return rollback_materialize_failure(&fenced_repo, plan_id, &summary, err);
             }
             summary.saved_bytes = summary.source_bytes.saturating_sub(summary.imported_bytes);
             let plan_summary = summary.as_import_plan_summary();
             if let Err(err) = plan::update_import_plan(
-                repo,
+                &fenced_repo,
                 plan_id,
                 "materialize_completed",
                 false,
                 &plan_summary,
             ) {
-                return rollback_materialize_failure(repo, plan_id, &summary, err);
+                return rollback_materialize_failure(&fenced_repo, plan_id, &summary, err);
             }
             Ok(summary)
         }
-        Err(err) => rollback_materialize_failure(repo, plan_id, &summary, err),
+        Err(err) => rollback_materialize_failure(&fenced_repo, plan_id, &summary, err),
     }
 }

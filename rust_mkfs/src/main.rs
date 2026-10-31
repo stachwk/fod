@@ -28,10 +28,10 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 38;
+const SCHEMA_VERSION: u64 = 39;
 const _: () = assert!(SCHEMA_VERSION as u32 == FOD_REQUIRED_SCHEMA_VERSION);
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 38] = [
+const MIGRATION_FILES: [&str; 39] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -70,9 +70,10 @@ const MIGRATION_FILES: [&str; 38] = [
     "0036_normalize_posix_mode_values.sql",
     "0037_widen_entity_identifiers.sql",
     "0038_symlink_hardlinks.sql",
+    "0039_index_materialization_fences.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 38] = [
+const MIGRATION_DESCRIPTIONS: [&str; 39] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -111,6 +112,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 38] = [
     "Normalize legacy full modes and constrain POSIX permission values",
     "Widen entity identifiers, references and serial sequences to BIGINT",
     "Represent additional names for shared symlink inodes",
+    "Fence and recover interrupted index materialization",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -334,6 +336,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0038_symlink_hardlinks.sql"
         )),
+        39 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0039_index_materialization_fences.sql"
+        )),
         _ => "",
     }
 }
@@ -378,6 +384,7 @@ fn migration_description(version: u64) -> &'static str {
         36 => MIGRATION_DESCRIPTIONS[35],
         37 => MIGRATION_DESCRIPTIONS[36],
         38 => MIGRATION_DESCRIPTIONS[37],
+        39 => MIGRATION_DESCRIPTIONS[38],
         _ => "Migration",
     }
 }
@@ -422,6 +429,7 @@ fn migration_filename(version: u64) -> &'static str {
         36 => MIGRATION_FILES[35],
         37 => MIGRATION_FILES[36],
         38 => MIGRATION_FILES[37],
+        39 => MIGRATION_FILES[38],
         _ => "unknown.sql",
     }
 }
@@ -615,7 +623,8 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('index_import_plans', 'scanned_file_count'),
                     ('index_import_plans', 'candidate_group_count'),
                     ('index_import_plans', 'confirmed_group_count'),
-                    ('index_import_plans', 'unique_payload_count')
+                    ('index_import_plans', 'unique_payload_count'),
+                    ('index_import_plans', 'materialize_fencing_token')
                 ) AS required_bigint_columns(table_name, column_name)
                 WHERE NOT EXISTS (
                     SELECT 1 FROM information_schema.columns c
@@ -624,6 +633,14 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                       AND c.column_name = required_bigint_columns.column_name
                       AND c.data_type = 'bigint'
                 )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns c
+                WHERE c.table_schema = 'fod'
+                  AND c.table_name = 'index_import_plans'
+                  AND c.column_name = 'materialize_lease_expires_at'
+                  AND c.data_type = 'timestamp with time zone'
             )
             AND NOT EXISTS (
                 SELECT 1
@@ -656,6 +673,7 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('index_import_plans', 'index_import_plans_source_bytes_nonnegative_check'),
                     ('index_import_plans', 'index_import_plans_estimated_bytes_nonnegative_check'),
                     ('index_import_plans', 'index_import_plans_saved_bytes_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_materialize_fencing_token_nonnegative_check'),
                     ('index_import_plan_entries', 'index_import_plan_entries_size_nonnegative_check'),
                     ('index_catalog_snapshots', 'index_catalog_snapshots_file_count_nonnegative_check'),
                     ('index_catalog_snapshots', 'index_catalog_snapshots_total_bytes_nonnegative_check'),

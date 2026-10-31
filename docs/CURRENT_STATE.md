@@ -4,6 +4,19 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+FOD 3.4.519 adds PostgreSQL schema 39 and crash recovery for interrupted
+indexer materialization. Each materialization mutation renews and checks a
+database lease with a fencing token in its own write transaction. Cleanup may
+take over an expired plan and remove its partial tree in one transaction;
+legacy `materialize_running` plans without a lease remain manual-recovery cases.
+`cargo check` passed for hotpath, indexer and mkfs. Runtime recovery regressions
+are not yet run. The full workspace check is blocked by the host's libfuse3
+3.17.4, below FOD's required 3.18.2. This host has PostgreSQL 17 `pg_config`
+without `--with-blocksize=32`, and no local server is running, so it is not
+evidence for the FOD PostgreSQL runtime. The required build path remains the
+custom PostgreSQL 16 image with `BLCKSZ=32KiB`; see `AGENTS.md` and
+[`FOD_POSTGRES_32K_CONTAINER.md`](FOD_POSTGRES_32K_CONTAINER.md).
+
 FOD 3.4.516 removes stale Cargo and pkg-config overrides that reported libfuse
 3.14.0 regardless of the selected system package. Local builds now inspect the
 actual resolved `fuse3.pc`; this host reports 3.17.4 and correctly fails the
@@ -22,8 +35,9 @@ result fields are decoded strictly and malformed UTF-8 returns `EIO`. See
 FOD 3.4.515 routes failures from root creation and block-size setup through
 the import rollback path after the plan is recorded as running. This closes
 the ordinary error-path leak that could leave a partial import permanently in
-`materialize_running`; process crashes still need durable lease-based recovery.
-The setup-failure regression remains pending.
+`materialize_running`. FOD 3.4.519 adds durable lease recovery with
+transaction-checked fencing; runtime regressions for setup failure and crash
+recovery remain pending.
 
 FOD 3.4.514 updates shared data-object reference counts during failed-import
 cleanup by atomically subtracting the number of deleted file references. The

@@ -197,6 +197,67 @@ unsafe fn create_or_reset_temp_table(conn: *mut PGconn, sql: &CString) -> Result
 }
 
 impl DbRepo {
+    pub fn insert_materialize_import_plan(
+        &self,
+        request_token: &str,
+        source_filter: &str,
+    ) -> Result<super::MaterializationFence, String> {
+        if request_token.is_empty() || source_filter.is_empty() {
+            return Err("materialization plan requires a request token and source".to_string());
+        }
+        let sql = CString::new(format!(
+            "INSERT INTO index_import_plans (
+                created_at, updated_at, status, request_token, dry_run, source_filter,
+                materialize_fencing_token, materialize_lease_expires_at
+            ) VALUES (
+                clock_timestamp(), clock_timestamp(), 'materialize_running', {}, FALSE, {},
+                1, clock_timestamp() + INTERVAL '60 seconds'
+            )
+            ON CONFLICT (request_token) DO NOTHING
+            RETURNING id_import_plan, materialize_fencing_token",
+            DbRepo::quote_literal(request_token),
+            DbRepo::quote_literal(source_filter),
+        ))
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let mut rows = query_rows_text_on_conn(conn, &sql)?;
+                if rows.is_empty() {
+                    let retry_sql = CString::new(format!(
+                        "SELECT id_import_plan, materialize_fencing_token
+                         FROM index_import_plans
+                         WHERE request_token = {}
+                           AND status = 'materialize_running'
+                           AND materialize_fencing_token = 1
+                           AND materialize_lease_expires_at > clock_timestamp()",
+                        DbRepo::quote_literal(request_token),
+                    ))
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    rows = query_rows_text_on_conn(conn, &retry_sql)?;
+                }
+                if rows.len() != 1 || rows[0].len() != 2 {
+                    return Err("materialization plan insert returned an invalid row".to_string());
+                }
+                let plan_id = rows[0][0]
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| "materialization plan id is invalid".to_string())?;
+                let fencing_token = rows[0][1]
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| "materialization fencing token is invalid".to_string())?;
+                if plan_id == 0 || fencing_token == 0 {
+                    return Err("materialization plan returned a non-positive identifier".into());
+                }
+                Ok(super::MaterializationFence {
+                    plan_id,
+                    fencing_token,
+                })
+            })
+        })
+    }
+
     pub fn upsert_index_source_staged(&self, row: &IndexSourceStageRow) -> Result<u64, String> {
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
@@ -646,12 +707,18 @@ impl DbRepo {
         &self,
         rows: &[IndexImportPlanEntryStageRow],
     ) -> Result<(), String> {
+        if let Some(fence) = self.materialization_fence() {
+            if rows.iter().any(|row| row.id_import_plan != fence.plan_id) {
+                return Err("FOD_INDEXER_MATERIALIZE_FENCE_PLAN_MISMATCH".to_string());
+            }
+        }
         if rows.is_empty() {
             return Ok(());
         }
 
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                self.validate_materialization_fence_on_conn(conn)?;
                 let stage_sql = CString::new(format!(
                     "
                     CREATE TEMP TABLE IF NOT EXISTS {stage} (
@@ -740,6 +807,7 @@ impl DbRepo {
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 exec_command(conn, &merge_sql)?;
+                self.validate_materialization_fence_on_conn(conn)?;
                 Ok(())
             })
         })
