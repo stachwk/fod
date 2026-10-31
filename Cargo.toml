@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "3.4.401"
+version = "3.4.402"
 rust-version = "1.85"
 
 [patch.crates-io]

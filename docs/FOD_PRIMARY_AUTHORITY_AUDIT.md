@@ -5,8 +5,8 @@ Document role: topic review/specification supporting the
 summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
-Date: 2026-10-25. Updated: 2026-10-31. Reviewed base: FOD 3.4.396
-(`53e6b87`). Scope: Rust FUSE runtime and its PostgreSQL repository. The
+Date: 2026-10-25. Updated: 2026-10-31. Reviewed base: FOD 3.4.401
+(`fcff376`). Scope: Rust FUSE runtime and its PostgreSQL repository. The
 historical unlink data-loss case below is repaired and its mounted regression
 was verified on 2026-10-26. Later increments addressed specific stale or
 replica-routed mutation inputs, authorization checks and inode/path bindings;
@@ -550,6 +550,28 @@ remain available for internal callers and do not carry a request identity.
   registers client sessions or open-file leases. A mismatch or inability to
   read either identity fails mount startup, keeping lifecycle state in the same
   logical database authority as filesystem data.
+
+### Rename preflight and transaction authority
+
+Source review on FOD 3.4.401 confirms that `rename()`'s source and destination
+lookups in `rust_fuse/src/fs.rs` only prepare candidate entry IDs and
+operation-specific errno checks. The callback first maps both parent inode
+numbers to their current primary-resolved directory IDs. The PostgreSQL
+transaction in `rename_namespace_replace_with_ownership_guard_internal()` then
+acquires sorted transaction-scoped advisory locks for both destination names
+and the source/target file resources, checks active destination and file leases,
+and resolves both names again using the parent IDs and names. It compares the
+resolved kind, entry ID, and backing file ID with the candidates before any
+deletion or rename. Parent ACL/mode checks, sticky-directory checks, and the
+directory-cycle query also run in that transaction. If another transaction
+changes a binding after preflight, the operation returns a conflict/source
+change outcome without applying the stale candidate.
+
+This source review closes the specific concern that a preflight rename lookup
+could independently authorize a mutation against an old binding. It is not a
+full interleaving proof for namespace mutation and does not close the broader
+mutation-precondition audit; deterministic mounted regressions remain the
+evidence for runtime behavior.
 
 ### Xattr callbacks and stale inode-to-path mappings
 
