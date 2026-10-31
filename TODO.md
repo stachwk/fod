@@ -14,6 +14,22 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Dokończyć audyt zakresów liczbowych wymuszanych przez schemat SQL.**
+  Audyt `docs/SQL_SCHEMA_LIMIT_AUDIT.md` wykazał signed `INTEGER` dla UID/GID,
+  kluczy `SERIAL` oraz indeksu bloku, a także brak ogólnych ograniczeń
+  nieujemności dla rozmiarów i `_order`. Ustalić wymagane zakresy POSIX/FUSE i
+  FOD, sprawdzić wartości istniejących danych, walidację transakcyjną oraz
+  konsekwencje migracji. Nie rozszerzać typów ani nie dodawać ograniczeń bez
+  tego sprawdzenia.
+
+- [x] **Egzekwować w PostgreSQL bajtowy limit 255 dla nazw FOD.** `VARCHAR(255)`
+  liczyło znaki, a nazwy komponentów Linuxa są limitowane bajtami; ponadto
+  `destination_write_leases.name` miało typ `TEXT`. Schema 33 dodała
+  `octet_length(name) <= 255` do nazw wpisów katalogowych, nazw xattr i nazwy
+  dzierżawy. Migracja i świeży schemat mają te same warunki. Test schematu
+  sprawdza granicę 255 bajtów oraz odrzucenie 256-bajtowej nazwy UTF-8 przez
+  bezpośredni SQL.
+
 - [x] **Rename replacement must preserve an open destination inode across mounts.**
   A mounted two-mount regression opened the destination on mount B, replaced its
   name from mount A, then received `ENOENT` reading the still-open descriptor.

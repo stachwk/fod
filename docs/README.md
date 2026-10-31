@@ -65,6 +65,7 @@ reported gap is still present or that a proposed fix has passed acceptance.
 | Standby availability and recovery | [HA/cache plan](plans/HA_READONLY_RECOVERY_AND_CACHE.md) | [Degraded read-only contract review](FOD_DEGRADED_READONLY_CONTRACT_REVIEW.md) |
 | Transaction boundaries and privileges | [Security](SECURITY.md), [runtime privilege policy](FOD_RUNTIME_PRIVILEGE_POLICY.md) | [C10 privilege audit](FOD_C10_POSTGRES_PRIVILEGE_AUDIT.md), [C10-B SQL inventory](FOD_C10B_SQL_MUTATION_INVENTORY.md), [C10-B2 transaction review](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md) |
 | Payload ownership | [Space accounting](space-accounting.md), [storage-format ADR](adr/storage-format-versioning.md) | [Payload ownership inventory](storage-payload-ownership-inventory.md) |
+| SQL-level value limits | [SQL schema limit audit](SQL_SCHEMA_LIMIT_AUDIT.md) | Keep schema constraints, migrations and direct-SQL boundary tests aligned |
 
 ## 1. Understand the current system
 

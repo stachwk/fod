@@ -28,10 +28,10 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 32;
+const SCHEMA_VERSION: u64 = 33;
 const _: () = assert!(SCHEMA_VERSION as u32 == FOD_REQUIRED_SCHEMA_VERSION);
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 32] = [
+const MIGRATION_FILES: [&str; 33] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -64,9 +64,10 @@ const MIGRATION_FILES: [&str; 32] = [
     "0030_posix_lock_wait_process_identity.sql",
     "0031_minimum_client_version.sql",
     "0032_schema_upgrade_state.sql",
+    "0033_byte_length_name_limits.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 32] = [
+const MIGRATION_DESCRIPTIONS: [&str; 33] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -99,6 +100,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 32] = [
     "Use host and process identity for cross-mount POSIX lock wait graphs",
     "Persist the minimum compatible FOD client release",
     "Gate FOD mounts while schema migrations are incomplete",
+    "Enforce Linux byte limits for filesystem and xattr names",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -298,6 +300,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0032_schema_upgrade_state.sql"
         )),
+        33 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0033_byte_length_name_limits.sql"
+        )),
         _ => "",
     }
 }
@@ -336,6 +342,7 @@ fn migration_description(version: u64) -> &'static str {
         30 => MIGRATION_DESCRIPTIONS[29],
         31 => MIGRATION_DESCRIPTIONS[30],
         32 => MIGRATION_DESCRIPTIONS[31],
+        33 => MIGRATION_DESCRIPTIONS[32],
         _ => "Migration",
     }
 }
@@ -374,6 +381,7 @@ fn migration_filename(version: u64) -> &'static str {
         30 => MIGRATION_FILES[29],
         31 => MIGRATION_FILES[30],
         32 => MIGRATION_FILES[31],
+        33 => MIGRATION_FILES[32],
         _ => "unknown.sql",
     }
 }
@@ -533,6 +541,24 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('monitor_session_stats')
                 ) AS required_relations(name)
                 WHERE to_regclass(format('fod.%I', name)) IS NULL
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM (VALUES
+                    ('directories', 'directories_name_octet_length_check'),
+                    ('files', 'files_name_octet_length_check'),
+                    ('hardlinks', 'hardlinks_name_octet_length_check'),
+                    ('symlinks', 'symlinks_name_octet_length_check'),
+                    ('xattrs', 'xattrs_name_octet_length_check'),
+                    ('destination_write_leases', 'destination_write_leases_name_octet_length_check')
+                ) AS required_checks(table_name, constraint_name)
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint c
+                    WHERE c.conrelid = to_regclass(format('fod.%I', table_name))
+                      AND c.conname = constraint_name
+                      AND c.contype = 'c'
+                )
             )
             AND to_regprocedure('fod.fod_prune_client_session_lock_leases()') IS NOT NULL
             AND EXISTS (

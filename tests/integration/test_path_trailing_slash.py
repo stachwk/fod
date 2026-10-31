@@ -542,6 +542,14 @@ def main() -> None:
                 errno.ENAMETOOLONG,
                 "open name longer than NAME_MAX",
             )
+            utf8_overlong_name = "é" * (name_max // 2 + 1)
+            assert len(utf8_overlong_name) <= 255
+            assert len(utf8_overlong_name.encode("utf-8")) > name_max
+            expect_errno(
+                lambda: os.open(directory / utf8_overlong_name, os.O_CREAT),
+                errno.ENAMETOOLONG,
+                "UTF-8 name over NAME_MAX by bytes",
+            )
             max_rename_source = directory / ("r" * name_max)
             too_long_rename_target = directory / ("r" * (name_max + 1))
             max_rename_source.write_bytes(b"rename NAME_MAX boundary")

@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 32;
+const SCHEMA_VERSION: u64 = 33;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -205,6 +205,23 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                       AND table_name = 'schema_version'
                       AND column_name = 'version'
                 )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM (VALUES
+                        ('directories', 'directories_name_octet_length_check'),
+                        ('files', 'files_name_octet_length_check'),
+                        ('hardlinks', 'hardlinks_name_octet_length_check'),
+                        ('symlinks', 'symlinks_name_octet_length_check'),
+                        ('xattrs', 'xattrs_name_octet_length_check'),
+                        ('destination_write_leases', 'destination_write_leases_name_octet_length_check')
+                    ) AS required_checks(table_name, constraint_name)
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM pg_constraint c
+                        WHERE c.conrelid = to_regclass(format('fod.%I', table_name))
+                          AND c.conname = constraint_name
+                          AND c.contype = 'c'
+                    )
+                )
                 AND
                 (
                     SELECT COUNT(*)
@@ -320,6 +337,38 @@ fn assert_latest_payload_schema(conn: &DbConn) {
         )
         .expect("inspect payload ownership schema");
     assert!(matches, "payload tables must be owned by data objects");
+
+    assert_sql_name_byte_limit(conn);
+}
+
+fn assert_sql_name_byte_limit(conn: &DbConn) {
+    conn.exec("BEGIN; SAVEPOINT name_byte_limit_probe")
+        .expect("begin SQL name-limit probe");
+    let boundary_name = "n".repeat(255);
+    conn.exec(&format!(
+        "INSERT INTO fod.xattrs (owner_kind, owner_id, name, value) \
+         VALUES ('file', 1, '{boundary_name}', decode('', 'hex'))"
+    ))
+    .expect("SQL must accept a name exactly 255 bytes long");
+    conn.exec("ROLLBACK TO SAVEPOINT name_byte_limit_probe")
+        .expect("rollback boundary name probe");
+
+    let overlong_utf8_name = "é".repeat(128);
+    assert_eq!(overlong_utf8_name.chars().count(), 128);
+    assert_eq!(overlong_utf8_name.len(), 256);
+    assert!(
+        conn.exec(&format!(
+            "INSERT INTO fod.xattrs (owner_kind, owner_id, name, value) \
+             VALUES ('file', 1, '{overlong_utf8_name}', decode('', 'hex'))"
+        ))
+        .is_err(),
+        "SQL must reject a 256-byte UTF-8 name even though it has only 128 characters"
+    );
+    conn.exec(
+        "ROLLBACK TO SAVEPOINT name_byte_limit_probe; \
+               RELEASE SAVEPOINT name_byte_limit_probe; COMMIT",
+    )
+    .expect("finish SQL name-limit probe");
 }
 
 fn prepare_version_16_payload_fixture(conn: &DbConn) {
@@ -360,6 +409,12 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
          ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_pkey;
          CREATE UNIQUE INDEX idx_copy_block_crc_object_order
              ON copy_block_crc (data_object_id, _order);
+         ALTER TABLE directories DROP CONSTRAINT IF EXISTS directories_name_octet_length_check;
+         ALTER TABLE files DROP CONSTRAINT IF EXISTS files_name_octet_length_check;
+         ALTER TABLE hardlinks DROP CONSTRAINT IF EXISTS hardlinks_name_octet_length_check;
+         ALTER TABLE symlinks DROP CONSTRAINT IF EXISTS symlinks_name_octet_length_check;
+         ALTER TABLE xattrs DROP CONSTRAINT IF EXISTS xattrs_name_octet_length_check;
+         ALTER TABLE destination_write_leases DROP CONSTRAINT IF EXISTS destination_write_leases_name_octet_length_check;
          UPDATE schema_version SET schema_number = 16, applied_at = NOW();"
     ))
     .expect("prepare schema version 16 block payload fixture");
@@ -857,10 +912,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 32",
+        "FOD schema version: 33",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 32",
+        "Latest migration version: 33",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -896,6 +951,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0030: 0030_posix_lock_wait_process_identity.sql",
         "0031: 0031_minimum_client_version.sql",
         "0032: 0032_schema_upgrade_state.sql",
+        "0033: 0033_byte_length_name_limits.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -909,7 +965,13 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
     assert!(status_after_init.contains("FOD schema upgrade in progress: no"));
 
     conn.exec(
-        "ALTER TABLE schema_version DROP COLUMN upgrade_in_progress; \
+        "ALTER TABLE directories DROP CONSTRAINT directories_name_octet_length_check; \
+         ALTER TABLE files DROP CONSTRAINT files_name_octet_length_check; \
+         ALTER TABLE hardlinks DROP CONSTRAINT hardlinks_name_octet_length_check; \
+         ALTER TABLE symlinks DROP CONSTRAINT symlinks_name_octet_length_check; \
+         ALTER TABLE xattrs DROP CONSTRAINT xattrs_name_octet_length_check; \
+         ALTER TABLE destination_write_leases DROP CONSTRAINT destination_write_leases_name_octet_length_check; \
+         ALTER TABLE schema_version DROP COLUMN upgrade_in_progress; \
          UPDATE schema_version SET schema_number = 31",
     )
     .expect("prepare pre-gate schema 31 fixture");
@@ -1088,10 +1150,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 32",
+        "Latest migration version: 33",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -1220,6 +1282,12 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "DROP TABLE fod.monitor_session_stats;
          CREATE INDEX idx_data_blocks_data_object_id
              ON fod.data_blocks (data_object_id);
+         ALTER TABLE fod.directories DROP CONSTRAINT directories_name_octet_length_check;
+         ALTER TABLE fod.files DROP CONSTRAINT files_name_octet_length_check;
+         ALTER TABLE fod.hardlinks DROP CONSTRAINT hardlinks_name_octet_length_check;
+         ALTER TABLE fod.symlinks DROP CONSTRAINT symlinks_name_octet_length_check;
+         ALTER TABLE fod.xattrs DROP CONSTRAINT xattrs_name_octet_length_check;
+         ALTER TABLE fod.destination_write_leases DROP CONSTRAINT destination_write_leases_name_octet_length_check;
          UPDATE fod.schema_version SET schema_number = 21, applied_at = NOW();",
     )
     .expect("prepare schema version 21 with legacy redundant data_blocks index");
@@ -1236,7 +1304,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 32"),
+        status_before_text.contains("Latest migration version: 33"),
         "{status_before_text}"
     );
     assert!(
@@ -1249,7 +1317,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     );
     assert!(
         status_before_text.contains(
-            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032"
+            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033"
         ),
         "{status_before_text}"
     );
@@ -1298,7 +1366,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 32"),
+        status_broken_text.contains("FOD schema version: 33"),
         "{status_broken_text}"
     );
     assert!(

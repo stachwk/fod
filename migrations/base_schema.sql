@@ -5,7 +5,8 @@ SET search_path TO fod, public;
 CREATE TABLE IF NOT EXISTS directories (
     id_directory SERIAL PRIMARY KEY,
     id_parent INTEGER REFERENCES directories(id_directory),
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL
+        CONSTRAINT directories_name_octet_length_check CHECK (octet_length(name) <= 255),
     mode VARCHAR(6) NOT NULL,
     uid INTEGER NOT NULL,
     gid INTEGER NOT NULL,
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS files (
     data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object),
     content_generation BIGINT NOT NULL DEFAULT 1,
     id_directory INTEGER REFERENCES directories(id_directory),
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL
+        CONSTRAINT files_name_octet_length_check CHECK (octet_length(name) <= 255),
     size BIGINT NOT NULL,
     mode VARCHAR(6) NOT NULL,
     uid INTEGER NOT NULL,
@@ -80,7 +82,8 @@ CREATE TABLE IF NOT EXISTS hardlinks (
     id_hardlink SERIAL PRIMARY KEY,
     id_file INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
     id_directory INTEGER REFERENCES directories(id_directory),
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL
+        CONSTRAINT hardlinks_name_octet_length_check CHECK (octet_length(name) <= 255),
     uid INTEGER NOT NULL,
     gid INTEGER NOT NULL,
     modification_date TIMESTAMP NOT NULL,
@@ -92,7 +95,8 @@ CREATE TABLE IF NOT EXISTS hardlinks (
 CREATE TABLE IF NOT EXISTS symlinks (
     id_symlink SERIAL PRIMARY KEY,
     id_parent INTEGER REFERENCES directories(id_directory),
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL
+        CONSTRAINT symlinks_name_octet_length_check CHECK (octet_length(name) <= 255),
     target TEXT NOT NULL,
     uid INTEGER NOT NULL,
     gid INTEGER NOT NULL,
@@ -144,7 +148,8 @@ CREATE TABLE IF NOT EXISTS xattrs (
     id SERIAL PRIMARY KEY,
     owner_kind VARCHAR(20) NOT NULL,
     owner_id INTEGER NOT NULL,
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL
+        CONSTRAINT xattrs_name_octet_length_check CHECK (octet_length(name) <= 255),
     value BYTEA NOT NULL,
     UNIQUE(owner_kind, owner_id, name)
 );
@@ -432,7 +437,8 @@ CREATE INDEX IF NOT EXISTS idx_client_session_owner_keys_last_seen
 CREATE TABLE IF NOT EXISTS destination_write_leases (
     fencing_token BIGSERIAL PRIMARY KEY,
     parent_key BIGINT NOT NULL CHECK (parent_key >= 0),
-    name TEXT NOT NULL,
+    name TEXT NOT NULL
+        CONSTRAINT destination_write_leases_name_octet_length_check CHECK (octet_length(name) <= 255),
     session_id BIGINT NOT NULL REFERENCES client_sessions(session_id) ON DELETE CASCADE,
     owner_key NUMERIC(20,0) NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
