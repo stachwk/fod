@@ -321,6 +321,20 @@ fn row_value<'a>(row: &'a [String], index: usize, label: &str) -> Result<&'a str
         .ok_or_else(|| format!("missing column {index} for {label}"))
 }
 
+pub(crate) fn require_exact_row_columns(
+    row: &[String],
+    expected: usize,
+    description: &str,
+) -> Result<(), String> {
+    if row.len() != expected {
+        return Err(format!(
+            "invalid {description} result: expected {expected} columns, got {}",
+            row.len()
+        ));
+    }
+    Ok(())
+}
+
 impl IndexSource {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
         Ok(Self {
@@ -395,5 +409,18 @@ impl DuplicateSet {
             file_count: parse_u64(row_value(row, 4, "duplicate set")?)?,
             total_bytes: parse_u64(row_value(row, 5, "duplicate set")?)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_exact_row_columns;
+
+    #[test]
+    fn exact_row_column_validator_rejects_short_and_extra_rows() {
+        let row = vec!["1".to_string(), "2".to_string()];
+        assert_eq!(require_exact_row_columns(&row, 2, "test row"), Ok(()));
+        assert!(require_exact_row_columns(&row, 1, "test row").is_err());
+        assert!(require_exact_row_columns(&row, 3, "test row").is_err());
     }
 }

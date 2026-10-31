@@ -998,6 +998,10 @@ Reading guide:
   the disposable current-schema database after verifying PostgreSQL 16.15's
   `--with-blocksize=32` build and `SHOW block_size=32768`; the database was
   dropped afterward.
+  FOD 3.4.488 makes hash-candidate and duplicate/import-plan report readers
+  reject malformed row widths. They previously skipped short rows, which could
+  silently omit data from a hash report or import-plan response. A pure
+  regression verifies both short and extra-column rows fail validation.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

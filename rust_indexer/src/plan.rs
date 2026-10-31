@@ -1,6 +1,6 @@
 use crate::db::{ensure_indexer_request_token_schema, sql_quote_literal};
 use crate::hash;
-use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
+use crate::model::{require_exact_row_columns, DuplicateSet, ImportPlanSummary, IndexedFile};
 use crate::output::{
     DuplicateReportSnapshot, DuplicateSetMemberView, DuplicateSetSnapshot, ImportPlanEntryView,
     ImportPlanSnapshot,
@@ -341,9 +341,7 @@ pub(crate) fn load_duplicate_report_snapshot(
 
     let mut duplicate_sets = Vec::new();
     for row in rows {
-        if row.len() < 2 {
-            continue;
-        }
+        require_exact_row_columns(&row, 2, "duplicate set report")?;
         let file_size = row[1]
             .trim()
             .parse::<u64>()
@@ -471,9 +469,7 @@ pub(crate) fn load_import_plan_snapshot(
     ))?;
     let mut entries = Vec::new();
     for row in entry_rows {
-        if row.len() < 15 {
-            continue;
-        }
+        require_exact_row_columns(&row, 15, "import plan entry")?;
         entries.push(ImportPlanEntryView {
             id_import_plan_entry: row[0]
                 .trim()

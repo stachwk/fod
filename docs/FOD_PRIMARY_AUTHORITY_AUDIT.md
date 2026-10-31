@@ -939,3 +939,7 @@ the same parent/name; the duplicate-symlink regression covers this resolver.
 All 72 `pg_query` tests passed against a disposable current-schema PostgreSQL
 16.15 database after confirming `--with-blocksize=32` and live
 `SHOW block_size=32768`; the database was dropped afterward.
+FOD 3.4.488 changes three indexer readers from silently skipping short SQL
+rows to rejecting any result row whose width differs from the query projection.
+This prevents malformed hash-candidate, duplicate-set and import-plan results
+from appearing complete.
