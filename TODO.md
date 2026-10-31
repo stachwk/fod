@@ -14,6 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **`link()` do symlinka różni się od zachowania Linuksa.**
+  Na lokalnym Linuksie 6.17 wywołanie `os.link(source, alias,
+  follow_symlinks=False)` dla `source` będącego symlinkiem tworzy drugi wpis
+  tego samego inode (`lstat()` pokazuje `S_IFLNK`, identyczne inode i `nlink=2`).
+  Callback `FodFuse::link()` w `rust_fuse/src/fs.rs` obsługuje wyłącznie wpisy
+  `file` i `hardlink`; symlink kończy się `ENOENT`. POSIX pozostawia zachowanie
+  `link()` dla symlinków implementacji, więc to potwierdzona różnica względem
+  Linuksa, a nie stwierdzone naruszenie POSIX. Obsługa wymaga modelu aliasów
+  symlinków w PostgreSQL oraz zgodnej tożsamości inode, `nlink`, lookup,
+  readdir, rename, unlink i promocji aliasu po usunięciu wpisu źródłowego.
+  Zaprojektować transakcyjny model przed implementacją; nie utożsamiać linku do
+  symlinka z linkiem do jego celu.
+
 - [x] **`opendir()` nie może zwracać inode roota jako `d_ino` wpisu `..` po utracie mapy rodzica.**
   Callback brał inode rodzica wyłącznie z lokalnego cache ścieżek i w razie
   braku mapowania podstawiał `ROOT_INO`. Regresja montowana celowo usuwa wpis
