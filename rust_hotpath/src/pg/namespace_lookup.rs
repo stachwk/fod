@@ -7,9 +7,9 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, join_nul_text, parse_persisted_posix_mode, result_error, DbRepo, PQclear,
-    PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement,
-    PGRES_TUPLES_OK,
+    fetch_rows_text, fetch_single_optional_text, join_nul_text, parse_persisted_posix_mode,
+    result_error, DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
+    PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -103,7 +103,10 @@ fn parse_directory_entry_metadata_rows(
             if row[0].is_empty() {
                 return Err("directory entry metadata row has an empty name".to_string());
             }
-            if !matches!(row[1].as_str(), "file" | "hardlink" | "dir" | "symlink") {
+            if !matches!(
+                row[1].as_str(),
+                "file" | "hardlink" | "dir" | "symlink" | "symlink_hardlink"
+            ) {
                 return Err(format!(
                     "directory entry metadata row has an invalid kind: {}",
                     row[1]
@@ -607,6 +610,32 @@ impl DbRepo {
         })
     }
 
+    pub fn get_symlink_hardlink_symlink_id(
+        &self,
+        symlink_hardlink_id: u64,
+    ) -> Result<Option<u64>, String> {
+        if symlink_hardlink_id == 0 {
+            return Err("symlink hardlink id must be positive".to_string());
+        }
+        let id = CString::new(symlink_hardlink_id.to_string())
+            .map_err(|_| "symlink hardlink id contains NUL byte".to_string())?;
+        let sql =
+            CString::new("SELECT id_symlink FROM symlink_hardlinks WHERE id_symlink_hardlink = $1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_read_connection(|conn| unsafe {
+            let value = fetch_single_optional_text(exec_params(conn, &sql, &[&id])?)?;
+            value
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid symlink id for hardlink entry".to_string())
+                })
+                .transpose()
+        })
+    }
+
     pub fn resolve_path(&self, path: &str) -> Result<ResolvedPath, String> {
         let normalized = path;
         if normalized.is_empty() {
@@ -716,6 +745,11 @@ impl DbRepo {
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
                     WHERE s.id_parent = $1
+                    UNION ALL
+                    SELECT h.name, 'symlink_hardlink', h.id_symlink_hardlink, s.inode_seed, ''
+                    FROM symlink_hardlinks h
+                    JOIN symlinks s ON s.id_symlink = h.id_symlink
+                    WHERE h.id_parent = $1
                     ORDER BY name
                     ",
                 )
@@ -745,6 +779,11 @@ impl DbRepo {
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
                     WHERE s.id_parent IS NULL
+                    UNION ALL
+                    SELECT h.name, 'symlink_hardlink', h.id_symlink_hardlink, s.inode_seed, ''
+                    FROM symlink_hardlinks h
+                    JOIN symlinks s ON s.id_symlink = h.id_symlink
+                    WHERE h.id_parent IS NULL
                     ORDER BY name
                     ",
                 )
@@ -785,6 +824,8 @@ impl DbRepo {
                     SELECT name FROM directories WHERE id_parent = $1
                     UNION ALL
                     SELECT name FROM symlinks WHERE id_parent = $1
+                    UNION ALL
+                    SELECT name FROM symlink_hardlinks WHERE id_parent = $1
                     ORDER BY name
                     ",
                 )
@@ -803,6 +844,8 @@ impl DbRepo {
                     SELECT name FROM hardlinks WHERE id_directory IS NULL
                     UNION ALL
                     SELECT name FROM symlinks WHERE id_parent IS NULL
+                    UNION ALL
+                    SELECT name FROM symlink_hardlinks WHERE id_parent IS NULL
                     ORDER BY name
                     ",
                 )
@@ -857,6 +900,11 @@ impl DbRepo {
                 SELECT s.name, 'symlink'::text, s.id_symlink, s.inode_seed, ''::text
                 FROM symlinks s
                 WHERE COALESCE(s.id_parent, 0) = $1
+                UNION ALL
+                SELECT h.name, 'symlink_hardlink'::text, h.id_symlink_hardlink, s.inode_seed, ''::text
+                FROM symlink_hardlinks h
+                JOIN symlinks s ON s.id_symlink = h.id_symlink
+                WHERE COALESCE(h.id_parent, 0) = $1
             ) entries
             WHERE name = $2
             ORDER BY kind
@@ -924,6 +972,14 @@ impl DbRepo {
                             &params,
                         )
                     }
+                    "symlink_hardlink" => {
+                        let params = [&entry_id];
+                        exec_prepared_params(
+                            conn,
+                            PreparedStatement::FetchPathAttrsBlobSymlinkHardlink,
+                            &params,
+                        )
+                    }
                     "hardlink" => {
                         let params = [&entry_id];
                         exec_prepared_params(
@@ -940,7 +996,9 @@ impl DbRepo {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
                             let symlink_target_validation =
-                                if kind == "symlink" && PQntuples(res) > 0 {
+                                if matches!(kind, "symlink" | "symlink_hardlink")
+                                    && PQntuples(res) > 0
+                                {
                                     if PQntuples(res) != 1 || PQnfields(res) != 8 {
                                         Err("invalid symlink metadata row returned by PostgreSQL"
                                             .to_string())

@@ -2035,6 +2035,7 @@ enum PreparedStatement {
     FetchPathAttrsBlobFile,
     FetchPathAttrsBlobDir,
     FetchPathAttrsBlobSymlink,
+    FetchPathAttrsBlobSymlinkHardlink,
     FetchPathAttrsBlobHardlink,
     StatfsSnapshot,
     LoadSymlinkTarget,
@@ -2067,6 +2068,7 @@ impl PreparedStatement {
             PreparedStatement::FetchPathAttrsBlobFile,
             PreparedStatement::FetchPathAttrsBlobDir,
             PreparedStatement::FetchPathAttrsBlobSymlink,
+            PreparedStatement::FetchPathAttrsBlobSymlinkHardlink,
             PreparedStatement::FetchPathAttrsBlobHardlink,
             PreparedStatement::StatfsSnapshot,
             PreparedStatement::LoadSymlinkTarget,
@@ -2099,6 +2101,9 @@ impl PreparedStatement {
             PreparedStatement::FetchPathAttrsBlobFile => "fod_fetch_path_attrs_blob_file",
             PreparedStatement::FetchPathAttrsBlobDir => "fod_fetch_path_attrs_blob_dir",
             PreparedStatement::FetchPathAttrsBlobSymlink => "fod_fetch_path_attrs_blob_symlink",
+            PreparedStatement::FetchPathAttrsBlobSymlinkHardlink => {
+                "fod_fetch_path_attrs_blob_symlink_hardlink"
+            }
             PreparedStatement::FetchPathAttrsBlobHardlink => "fod_fetch_path_attrs_blob_hardlink",
             PreparedStatement::StatfsSnapshot => "fod_statfs_snapshot",
             PreparedStatement::LoadSymlinkTarget => "fod_load_symlink_target",
@@ -2257,6 +2262,10 @@ impl PreparedStatement {
                     FROM symlinks s
                     WHERE s.name = $1 AND s.id_parent IS NULL
                     UNION ALL
+                    SELECT 2 AS precedence, 'symlink_hardlink' AS kind, h.id_symlink_hardlink AS entry_id
+                    FROM symlink_hardlinks h
+                    WHERE h.name = $1 AND h.id_parent IS NULL
+                    UNION ALL
                     SELECT 3 AS precedence, 'file' AS kind, f.id_file AS entry_id
                     FROM files f
                     WHERE f.name = $1 AND f.id_directory IS NULL AND NOT f.unlinked
@@ -2279,6 +2288,10 @@ impl PreparedStatement {
                     SELECT 2 AS precedence, 'symlink' AS kind, s.id_symlink AS entry_id
                     FROM symlinks s
                     WHERE s.name = $1 AND s.id_parent = $2
+                    UNION ALL
+                    SELECT 2 AS precedence, 'symlink_hardlink' AS kind, h.id_symlink_hardlink AS entry_id
+                    FROM symlink_hardlinks h
+                    WHERE h.name = $1 AND h.id_parent = $2
                     UNION ALL
                     SELECT 3 AS precedence, 'file' AS kind, f.id_file AS entry_id
                     FROM files f
@@ -2319,6 +2332,9 @@ impl PreparedStatement {
             PreparedStatement::FetchPathAttrsBlobSymlink => {
                 "SELECT id_symlink, target, modification_date, access_date, change_date, uid, gid, inode_seed FROM symlinks WHERE id_symlink = $1"
             }
+            PreparedStatement::FetchPathAttrsBlobSymlinkHardlink => {
+                "SELECT s.id_symlink, s.target, s.modification_date, s.access_date, s.change_date, s.uid, s.gid, s.inode_seed FROM symlink_hardlinks h JOIN symlinks s ON s.id_symlink = h.id_symlink WHERE h.id_symlink_hardlink = $1"
+            }
             PreparedStatement::FetchPathAttrsBlobHardlink => {
                 "
                 SELECT
@@ -2351,10 +2367,10 @@ impl PreparedStatement {
                 "SELECT file_type, rdev_major, rdev_minor FROM special_files WHERE id_file = $1"
             }
             PreparedStatement::GetSymlinkIdRoot => {
-                "SELECT id_symlink FROM symlinks WHERE name = $1 AND id_parent IS NULL"
+                "SELECT id_symlink FROM symlinks WHERE name = $1 AND id_parent IS NULL UNION ALL SELECT id_symlink FROM symlink_hardlinks WHERE name = $1 AND id_parent IS NULL"
             }
             PreparedStatement::GetSymlinkIdNested => {
-                "SELECT id_symlink FROM symlinks WHERE name = $1 AND id_parent = $2"
+                "SELECT id_symlink FROM symlinks WHERE name = $1 AND id_parent = $2 UNION ALL SELECT id_symlink FROM symlink_hardlinks WHERE name = $1 AND id_parent = $2"
             }
         }
     }
@@ -2384,6 +2400,7 @@ impl PreparedStatement {
             | PreparedStatement::FetchPathAttrsBlobFile
             | PreparedStatement::FetchPathAttrsBlobDir
             | PreparedStatement::FetchPathAttrsBlobSymlink
+            | PreparedStatement::FetchPathAttrsBlobSymlinkHardlink
             | PreparedStatement::FetchPathAttrsBlobHardlink
             | PreparedStatement::StatfsSnapshot
             | PreparedStatement::LoadSymlinkTarget
@@ -2409,6 +2426,7 @@ impl PreparedStatement {
             | PreparedStatement::FetchPathAttrsBlobFile
             | PreparedStatement::FetchPathAttrsBlobDir
             | PreparedStatement::FetchPathAttrsBlobSymlink
+            | PreparedStatement::FetchPathAttrsBlobSymlinkHardlink
             | PreparedStatement::FetchPathAttrsBlobHardlink
             | PreparedStatement::LoadSymlinkTarget
             | PreparedStatement::GetSpecialFileMetadata
@@ -4069,6 +4087,7 @@ pub enum RenameNamespaceSource {
     File { file_id: u64 },
     Hardlink { hardlink_id: u64, file_id: u64 },
     Symlink { symlink_id: u64 },
+    SymlinkHardlink { hardlink_id: u64, symlink_id: u64 },
     Directory { directory_id: u64 },
 }
 
@@ -4078,6 +4097,7 @@ impl RenameNamespaceSource {
             Self::File { .. } => "file",
             Self::Hardlink { .. } => "hardlink",
             Self::Symlink { .. } => "symlink",
+            Self::SymlinkHardlink { .. } => "symlink_hardlink",
             Self::Directory { .. } => "dir",
         }
     }
@@ -4087,6 +4107,7 @@ impl RenameNamespaceSource {
             Self::File { file_id } => file_id,
             Self::Hardlink { hardlink_id, .. } => hardlink_id,
             Self::Symlink { symlink_id } => symlink_id,
+            Self::SymlinkHardlink { hardlink_id, .. } => hardlink_id,
             Self::Directory { directory_id } => directory_id,
         }
     }
@@ -4094,7 +4115,16 @@ impl RenameNamespaceSource {
     fn file_id(self) -> Option<u64> {
         match self {
             Self::File { file_id } | Self::Hardlink { file_id, .. } => Some(file_id),
-            Self::Symlink { .. } | Self::Directory { .. } => None,
+            Self::Symlink { .. } | Self::SymlinkHardlink { .. } | Self::Directory { .. } => None,
+        }
+    }
+
+    fn symlink_id(self) -> Option<u64> {
+        match self {
+            Self::Symlink { symlink_id } | Self::SymlinkHardlink { symlink_id, .. } => {
+                Some(symlink_id)
+            }
+            _ => None,
         }
     }
 }
@@ -4104,6 +4134,7 @@ pub enum RenameNamespaceTarget {
     File { file_id: u64 },
     Hardlink { hardlink_id: u64, file_id: u64 },
     Symlink { symlink_id: u64 },
+    SymlinkHardlink { hardlink_id: u64, symlink_id: u64 },
     Directory { directory_id: u64 },
 }
 
@@ -4113,6 +4144,7 @@ impl RenameNamespaceTarget {
             Self::File { .. } => "file",
             Self::Hardlink { .. } => "hardlink",
             Self::Symlink { .. } => "symlink",
+            Self::SymlinkHardlink { .. } => "symlink_hardlink",
             Self::Directory { .. } => "dir",
         }
     }
@@ -4122,6 +4154,7 @@ impl RenameNamespaceTarget {
             Self::File { file_id } => file_id,
             Self::Hardlink { hardlink_id, .. } => hardlink_id,
             Self::Symlink { symlink_id } => symlink_id,
+            Self::SymlinkHardlink { hardlink_id, .. } => hardlink_id,
             Self::Directory { directory_id } => directory_id,
         }
     }
@@ -4129,7 +4162,16 @@ impl RenameNamespaceTarget {
     fn file_id(self) -> Option<u64> {
         match self {
             Self::File { file_id } | Self::Hardlink { file_id, .. } => Some(file_id),
-            Self::Symlink { .. } | Self::Directory { .. } => None,
+            Self::Symlink { .. } | Self::SymlinkHardlink { .. } | Self::Directory { .. } => None,
+        }
+    }
+
+    fn symlink_id(self) -> Option<u64> {
+        match self {
+            Self::Symlink { symlink_id } | Self::SymlinkHardlink { symlink_id, .. } => {
+                Some(symlink_id)
+            }
+            _ => None,
         }
     }
 }
@@ -5850,6 +5892,27 @@ impl DbRepo {
         }
     }
 
+    fn confirm_created_symlink_hardlink(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        symlink_id: u64,
+    ) -> Result<Option<u64>, String> {
+        let parent_clause = match target_parent_id {
+            Some(parent_id) => format!("id_parent = {parent_id}"),
+            None => "id_parent IS NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT id_symlink_hardlink FROM symlink_hardlinks WHERE {parent_clause} AND name = {} AND id_symlink = {symlink_id} LIMIT 1",
+            Self::quote_literal(target_name)
+        );
+        let rows = self.query_rows_text(&sql)?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        Ok(row.first().and_then(|id| id.trim().parse::<u64>().ok()))
+    }
+
     fn confirm_created_directory(
         &self,
         target_parent_id: Option<u64>,
@@ -6157,6 +6220,7 @@ impl DbRepo {
                 UNION ALL SELECT 'directory' FROM directories WHERE COALESCE(id_parent, 0) = $1 AND name = $2
                 UNION ALL SELECT 'hardlink' FROM hardlinks WHERE COALESCE(id_directory, 0) = $1 AND name = $2
                 UNION ALL SELECT 'symlink' FROM symlinks WHERE COALESCE(id_parent, 0) = $1 AND name = $2
+                UNION ALL SELECT 'symlink' FROM symlink_hardlinks WHERE COALESCE(id_parent, 0) = $1 AND name = $2
              ) entries LIMIT 1",
         ).unwrap();
         let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
@@ -10905,6 +10969,12 @@ impl DbRepo {
             resource_keys.push(format!("fod:open:file:{target_file_id}"));
             resource_keys.push(format!("fod:write:file:{target_file_id}"));
         }
+        if let Some(symlink_id) = source.symlink_id() {
+            resource_keys.push(format!("fod:inode:symlink:{symlink_id}"));
+        }
+        if let Some(symlink_id) = expected_target.and_then(|target| target.symlink_id()) {
+            resource_keys.push(format!("fod:inode:symlink:{symlink_id}"));
+        }
         resource_keys.sort_unstable();
         resource_keys.dedup();
         let resource_keys = resource_keys
@@ -10938,6 +11008,13 @@ impl DbRepo {
                     id_symlink::text AS entry_id,
                     ''::text AS file_id
                 FROM symlinks
+                WHERE COALESCE(id_parent, 0) = $1 AND name = $2
+                UNION ALL
+                SELECT
+                    'symlink_hardlink'::text AS kind,
+                    id_symlink_hardlink::text AS entry_id,
+                    ''::text AS file_id
+                FROM symlink_hardlinks
                 WHERE COALESCE(id_parent, 0) = $1 AND name = $2
                 UNION ALL
                 SELECT
@@ -10994,8 +11071,16 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_hardlink = CString::new("DELETE FROM hardlinks WHERE id_hardlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_symlink = CString::new("DELETE FROM symlinks WHERE id_symlink = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_symlink_hardlink =
+            CString::new("DELETE FROM symlink_hardlinks WHERE id_symlink_hardlink = $1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_lock_symlink =
+            CString::new("SELECT id_symlink FROM symlinks WHERE id_symlink = $1 FOR UPDATE")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_validate_symlink_hardlink = CString::new(
+            "SELECT id_symlink FROM symlink_hardlinks WHERE id_symlink_hardlink = $1 FOR UPDATE",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_directory = CString::new("DELETE FROM directories WHERE id_directory = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_count_directory_children = CString::new(
@@ -11005,6 +11090,7 @@ impl DbRepo {
               + (SELECT COUNT(*) FROM files WHERE id_directory = $1 AND NOT unlinked)
               + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
               + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
+              + (SELECT COUNT(*) FROM symlink_hardlinks WHERE id_parent = $1)
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -11030,6 +11116,14 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_rename_symlink_nested = CString::new(
             "UPDATE symlinks SET name = $1, id_parent = $2, modification_date = NOW() WHERE id_symlink = $3",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_symlink_hardlink_root = CString::new(
+            "UPDATE symlink_hardlinks SET name = $1, id_parent = NULL WHERE id_symlink_hardlink = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_symlink_hardlink_nested = CString::new(
+            "UPDATE symlink_hardlinks SET name = $1, id_parent = $2 WHERE id_symlink_hardlink = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_rename_directory_root = CString::new(
@@ -11148,6 +11242,61 @@ impl DbRepo {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
+                    let mut symlink_ids = source
+                        .symlink_id()
+                        .into_iter()
+                        .chain(expected_target.and_then(|target| target.symlink_id()))
+                        .collect::<Vec<_>>();
+                    symlink_ids.sort_unstable();
+                    symlink_ids.dedup();
+                    for symlink_id in symlink_ids {
+                        let symlink_id_param = CString::new(symlink_id.to_string())
+                            .map_err(|_| "symlink id contains NUL byte".to_string())?;
+                        if fetch_single_text_option(exec_params(
+                            conn,
+                            &sql_lock_symlink,
+                            &[&symlink_id_param],
+                        )?)?
+                        .is_none()
+                        {
+                            return Ok(RenameFileReplaceOutcome::SourceMissing);
+                        }
+                    }
+                    for alias in [
+                        match source {
+                            RenameNamespaceSource::SymlinkHardlink {
+                                hardlink_id,
+                                symlink_id,
+                            } => Some((hardlink_id, symlink_id)),
+                            _ => None,
+                        },
+                        expected_target.and_then(|target| match target {
+                            RenameNamespaceTarget::SymlinkHardlink {
+                                hardlink_id,
+                                symlink_id,
+                            } => Some((hardlink_id, symlink_id)),
+                            _ => None,
+                        }),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        let alias_id = CString::new(alias.0.to_string())
+                            .map_err(|_| "symlink hardlink id contains NUL byte".to_string())?;
+                        let expected_symlink_id = CString::new(alias.1.to_string())
+                            .map_err(|_| "symlink id contains NUL byte".to_string())?;
+                        if fetch_single_text_option(exec_params(
+                            conn,
+                            &sql_validate_symlink_hardlink,
+                            &[&alias_id],
+                        )?)?
+                        .as_deref()
+                            != Some(expected_symlink_id.to_string_lossy().trim())
+                        {
+                            return Ok(RenameFileReplaceOutcome::Busy);
+                        }
+                    }
+
                     if let (RenameNamespaceSource::Directory { directory_id }, Some(parent_id)) =
                         (source, new_parent_id)
                     {
@@ -11191,10 +11340,15 @@ impl DbRepo {
                         old_parent_id,
                         if source.file_id().is_some() {
                             "file"
+                        } else if source.symlink_id().is_some() {
+                            "symlink"
                         } else {
                             source.entry_kind()
                         },
-                        source.file_id().unwrap_or(source.entry_id()),
+                        source
+                            .file_id()
+                            .or_else(|| source.symlink_id())
+                            .unwrap_or(source.entry_id()),
                         actor_uid,
                     )?;
                     if let Some(target) = expected_target {
@@ -11203,10 +11357,15 @@ impl DbRepo {
                             new_parent_id,
                             if target.file_id().is_some() {
                                 "file"
+                            } else if target.symlink_id().is_some() {
+                                "symlink"
                             } else {
                                 target.entry_kind()
                             },
-                            target.file_id().unwrap_or(target.entry_id()),
+                            target
+                                .file_id()
+                                .or_else(|| target.symlink_id())
+                                .unwrap_or(target.entry_id()),
                             actor_uid,
                         )?;
                     }
@@ -11218,6 +11377,11 @@ impl DbRepo {
                             if source_file_id == target_file_id {
                                 return Ok(RenameFileReplaceOutcome::NoOpSameFile);
                             }
+                        }
+                        if source.symlink_id().is_some()
+                            && source.symlink_id() == target.symlink_id()
+                        {
+                            return Ok(RenameFileReplaceOutcome::NoOpSameFile);
                         }
 
                         match target {
@@ -11235,12 +11399,18 @@ impl DbRepo {
                                 exec_command_params(conn, &sql_delete_hardlink, &params)?;
                             }
                             RenameNamespaceTarget::Symlink { symlink_id } => {
-                                let symlink_id_param = CString::new(symlink_id.to_string())
+                                Self::remove_symlink_entry_or_promote_on_conn(conn, symlink_id)?;
+                            }
+                            RenameNamespaceTarget::SymlinkHardlink { hardlink_id, .. } => {
+                                let hardlink_id_param = CString::new(hardlink_id.to_string())
                                     .map_err(|_| {
-                                        "target symlink id contains NUL byte".to_string()
+                                        "symlink hardlink id contains NUL byte".to_string()
                                     })?;
-                                let params = [&symlink_id_param];
-                                exec_command_params(conn, &sql_delete_symlink, &params)?;
+                                exec_command_params(
+                                    conn,
+                                    &sql_delete_symlink_hardlink,
+                                    &[&hardlink_id_param],
+                                )?;
                             }
                             RenameNamespaceTarget::Directory { directory_id } => {
                                 let directory_id_param = CString::new(directory_id.to_string())
@@ -11326,6 +11496,27 @@ impl DbRepo {
                             } else {
                                 let params = [&new_name_param, &symlink_id_param];
                                 exec_command_params(conn, &sql_rename_symlink_root, &params)?;
+                            }
+                        }
+                        RenameNamespaceSource::SymlinkHardlink { hardlink_id, .. } => {
+                            let hardlink_id_param = CString::new(hardlink_id.to_string())
+                                .map_err(|_| "symlink hardlink id contains NUL byte".to_string())?;
+                            if let Some(new_parent_id) = new_parent_id {
+                                let new_parent_id_param = CString::new(new_parent_id.to_string())
+                                    .map_err(|_| {
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
+                                exec_command_params(
+                                    conn,
+                                    &sql_rename_symlink_hardlink_nested,
+                                    &[&new_name_param, &new_parent_id_param, &hardlink_id_param],
+                                )?;
+                            } else {
+                                exec_command_params(
+                                    conn,
+                                    &sql_rename_symlink_hardlink_root,
+                                    &[&new_name_param, &hardlink_id_param],
+                                )?;
                             }
                         }
                         RenameNamespaceSource::Directory { directory_id } => {
@@ -11426,6 +11617,35 @@ impl DbRepo {
         )
     }
 
+    unsafe fn remove_symlink_entry_or_promote_on_conn(
+        conn: *mut PGconn,
+        symlink_id: u64,
+    ) -> Result<(), String> {
+        let id = CString::new(symlink_id.to_string()).unwrap();
+        let aliases = CString::new("SELECT id_symlink_hardlink::text, COALESCE(id_parent,0)::text, name FROM symlink_hardlinks WHERE id_symlink=$1 ORDER BY id_symlink_hardlink LIMIT 1 FOR UPDATE").unwrap();
+        let promote = CString::new("UPDATE symlinks SET name=$1, id_parent=NULLIF($2,0), modification_date=clock_timestamp(), change_date=clock_timestamp() WHERE id_symlink=$3").unwrap();
+        let delete_alias = CString::new(
+            "DELETE FROM symlink_hardlinks WHERE id_symlink_hardlink=$1 AND id_symlink=$2",
+        )
+        .unwrap();
+        let delete = CString::new("DELETE FROM symlinks WHERE id_symlink=$1").unwrap();
+        let rows = fetch_rows_text(exec_params(conn, &aliases, &[&id])?)?;
+        let Some(alias) = rows.first() else {
+            return exec_command_params(conn, &delete, &[&id]);
+        };
+        if alias.len() != 3 {
+            return Err("symlink promotion row is malformed".to_string());
+        }
+        let alias_id = CString::new(alias[0].trim())
+            .map_err(|_| "symlink hardlink id contains NUL byte".to_string())?;
+        let alias_parent = CString::new(alias[1].trim())
+            .map_err(|_| "symlink hardlink parent id contains NUL byte".to_string())?;
+        let alias_name = CString::new(alias[2].as_str())
+            .map_err(|_| "symlink hardlink name contains NUL byte".to_string())?;
+        exec_command_params(conn, &promote, &[&alias_name, &alias_parent, &id])?;
+        exec_command_params(conn, &delete_alias, &[&alias_id, &id])
+    }
+
     fn unlink_symlink_entry_internal(
         &self,
         symlink_id: u64,
@@ -11439,7 +11659,6 @@ impl DbRepo {
         let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
         let name = CString::new(name).map_err(|_| "symlink name contains NUL byte".to_string())?;
         let binding = CString::new("SELECT id_symlink FROM symlinks WHERE id_symlink=$1 AND COALESCE(id_parent,0)=$2 AND name=$3 FOR UPDATE").unwrap();
-        let delete = CString::new("DELETE FROM symlinks WHERE id_symlink=$1").unwrap();
         self.with_transaction(|tx| unsafe {
             Self::advisory_xact_lock_text_on_conn(tx.conn, &namespace_key)?;
             if fetch_single_text_option(exec_params(tx.conn, &binding, &[&id, &parent, &name])?)?
@@ -11458,7 +11677,91 @@ impl DbRepo {
             Self::require_sticky_removal_on_conn(
                 tx.conn, parent_id, "symlink", symlink_id, actor_uid,
             )?;
-            exec_command_params(tx.conn, &delete, &[&id])
+            Self::remove_symlink_entry_or_promote_on_conn(tx.conn, symlink_id)
+        })
+    }
+
+    pub fn unlink_symlink_hardlink_entry_for_subject_acl(
+        &self,
+        symlink_hardlink_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<(), String> {
+        let namespace_key = Self::namespace_serialization_key(parent_id, name)?;
+        let alias_id = CString::new(symlink_hardlink_id.to_string()).unwrap();
+        let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
+        let name = CString::new(name).map_err(|_| "symlink name contains NUL byte".to_string())?;
+        let find_inode = CString::new(
+            "SELECT id_symlink FROM symlink_hardlinks WHERE id_symlink_hardlink=$1 AND COALESCE(id_parent,0)=$2 AND name=$3",
+        ).unwrap();
+        let lock_inode =
+            CString::new("SELECT id_symlink FROM symlinks WHERE id_symlink=$1 FOR UPDATE").unwrap();
+        let binding = CString::new(
+            "SELECT id_symlink FROM symlink_hardlinks WHERE id_symlink_hardlink=$1 AND COALESCE(id_parent,0)=$2 AND name=$3 FOR UPDATE",
+        ).unwrap();
+        let delete = CString::new(
+            "DELETE FROM symlink_hardlinks WHERE id_symlink_hardlink=$1 AND id_symlink=$2",
+        )
+        .unwrap();
+        self.with_transaction(|tx| unsafe {
+            Self::advisory_xact_lock_text_on_conn(tx.conn, &namespace_key)?;
+            let Some(symlink_id) = fetch_single_text_option(exec_params(
+                tx.conn,
+                &find_inode,
+                &[&alias_id, &parent, &name],
+            )?)?
+            else {
+                return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+            };
+            let symlink_id_num = symlink_id
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid symlink id".to_string())?;
+            let symlink_id = CString::new(symlink_id.trim())
+                .map_err(|_| "symlink id contains NUL byte".to_string())?;
+            if fetch_single_text_option(exec_params(tx.conn, &lock_inode, &[&symlink_id])?)?
+                .is_none()
+            {
+                return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+            }
+            if fetch_single_text_option(exec_params(
+                tx.conn,
+                &binding,
+                &[&alias_id, &parent, &name],
+            )?)?
+            .is_none()
+            {
+                return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+            }
+            if use_posix_acl {
+                Self::require_parent_write_search_acl_on_conn(
+                    tx.conn,
+                    parent_id,
+                    actor_uid,
+                    actor_gid,
+                    supplementary_groups,
+                )?;
+            } else {
+                Self::require_parent_write_search_on_conn(
+                    tx.conn,
+                    parent_id,
+                    actor_uid,
+                    actor_gid,
+                    supplementary_groups,
+                )?;
+            }
+            Self::require_sticky_removal_on_conn(
+                tx.conn,
+                parent_id,
+                "symlink",
+                symlink_id_num,
+                actor_uid,
+            )?;
+            exec_command_params(tx.conn, &delete, &[&alias_id, &symlink_id])
         })
     }
 
@@ -11470,6 +11773,16 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             let params = [&symlink_id];
             exec_command_params(conn, &sql, &params)
+        })
+    }
+
+    pub fn delete_symlink_hardlink_entry(&self, symlink_hardlink_id: u64) -> Result<(), String> {
+        let sql = CString::new("DELETE FROM symlink_hardlinks WHERE id_symlink_hardlink = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let symlink_hardlink_id = CString::new(symlink_hardlink_id.to_string())
+            .map_err(|_| "symlink hardlink id contains NUL byte".to_string())?;
+        self.with_transaction(|transaction| unsafe {
+            exec_command_params(transaction.conn, &sql, &[&symlink_hardlink_id])
         })
     }
 
@@ -11557,6 +11870,7 @@ impl DbRepo {
                 UNION ALL SELECT 1 FROM hardlinks WHERE id_directory = $1
                 UNION ALL SELECT 1 FROM directories WHERE id_parent = $1
                 UNION ALL SELECT 1 FROM symlinks WHERE id_parent = $1
+                UNION ALL SELECT 1 FROM symlink_hardlinks WHERE id_parent = $1
              )::text",
         )
         .unwrap();
@@ -11838,6 +12152,160 @@ impl DbRepo {
             None,
             false,
         )
+    }
+
+    pub fn create_symlink_hardlink(
+        &self,
+        symlink_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+    ) -> Result<u64, String> {
+        self.create_symlink_hardlink_internal(
+            symlink_id,
+            target_parent_id,
+            target_name,
+            None,
+            false,
+        )
+    }
+
+    pub fn create_symlink_hardlink_for_subject(
+        &self,
+        symlink_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_symlink_hardlink_internal(
+            symlink_id,
+            target_parent_id,
+            target_name,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+            false,
+        )
+    }
+
+    pub fn create_symlink_hardlink_for_subject_with_acl(
+        &self,
+        symlink_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_symlink_hardlink_internal(
+            symlink_id,
+            target_parent_id,
+            target_name,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+            true,
+        )
+    }
+
+    fn create_symlink_hardlink_internal(
+        &self,
+        symlink_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        parent_actor: Option<(u32, u32, &[u32])>,
+        use_posix_acl: bool,
+    ) -> Result<u64, String> {
+        let target_name_text = target_name.to_string();
+        let symlink_id_value = symlink_id;
+        let target_name =
+            CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
+        let symlink_id = CString::new(symlink_id.to_string())
+            .map_err(|_| "symlink id contains NUL byte".to_string())?;
+        let sql_source =
+            CString::new("SELECT id_symlink FROM symlinks WHERE id_symlink = $1 FOR UPDATE")
+                .unwrap();
+        let sql_root = CString::new(
+            "INSERT INTO symlink_hardlinks (id_symlink, id_parent, name) VALUES ($1, NULL, $2) RETURNING id_symlink_hardlink",
+        )
+        .unwrap();
+        let sql_nested = CString::new(
+            "INSERT INTO symlink_hardlinks (id_symlink, id_parent, name) VALUES ($1, $3, $2) RETURNING id_symlink_hardlink",
+        )
+        .unwrap();
+        let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
+        let result = self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                if fetch_single_text_option(exec_params(conn, &sql_source, &[&symlink_id])?)?
+                    .is_none()
+                {
+                    return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
+                }
+                if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                    if use_posix_acl {
+                        Self::require_parent_write_search_acl_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    } else {
+                        Self::require_parent_write_search_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    }
+                }
+                Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
+                let res = if let Some(parent_id) = target_parent_id {
+                    let parent_id = CString::new(parent_id.to_string())
+                        .map_err(|_| "parent id contains NUL byte".to_string())?;
+                    exec_params(conn, &sql_nested, &[&symlink_id, &target_name, &parent_id])?
+                } else {
+                    exec_params(conn, &sql_root, &[&symlink_id, &target_name])?
+                };
+                let value = match PQresultStatus(res) {
+                    PGRES_TUPLES_OK => {
+                        let rows = PQntuples(res);
+                        let cols = PQnfields(res);
+                        let value = if rows < 1 || cols < 1 || PQgetisnull(res, 0, 0) != 0 {
+                            None
+                        } else {
+                            let value_ptr = PQgetvalue(res, 0, 0);
+                            (!value_ptr.is_null())
+                                .then(|| {
+                                    CStr::from_ptr(value_ptr)
+                                        .to_string_lossy()
+                                        .trim()
+                                        .parse::<u64>()
+                                        .ok()
+                                })
+                                .flatten()
+                        };
+                        PQclear(res);
+                        value.ok_or_else(|| "failed to create symlink hardlink".to_string())
+                    }
+                    _ => {
+                        let error = result_error(res);
+                        PQclear(res);
+                        Err(error)
+                    }
+                }?;
+                Ok(value)
+            })
+        });
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => self.confirm_unique_violation(err, |repo| {
+                repo.confirm_created_symlink_hardlink(
+                    target_parent_id,
+                    &target_name_text,
+                    symlink_id_value,
+                )
+            }),
+        }
     }
 
     pub fn create_symlink_for_subject(

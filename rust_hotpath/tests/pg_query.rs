@@ -3,7 +3,7 @@
 
 use fod_rust_hotpath::pg::{
     DbRepo, DirectoryEntryMetadata, DirectoryUnlinkOutcome, FileUnlinkOutcome, PersistBlockRow,
-    ResolvedPath, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    RenameNamespaceSource, ResolvedPath, STORAGE_QUOTA_EXCEEDED_PREFIX,
 };
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
@@ -110,6 +110,7 @@ struct NamespaceFixture {
     file_id: Option<u64>,
     hardlink_id: Option<u64>,
     symlink_id: Option<u64>,
+    symlink_hardlink_id: Option<u64>,
     child_directory_id: Option<u64>,
 }
 
@@ -120,6 +121,9 @@ impl Drop for NamespaceFixture {
             cleanup.push(self.repo.delete_hardlink_entry(id));
         }
         if let Some(id) = self.symlink_id {
+            if let Some(alias_id) = self.symlink_hardlink_id {
+                cleanup.push(self.repo.delete_symlink_hardlink_entry(alias_id));
+            }
             cleanup.push(self.repo.delete_owner_xattrs("symlink", id));
             cleanup.push(self.repo.delete_symlink_entry(id));
         }
@@ -153,6 +157,7 @@ impl NamespaceFixture {
             file_id: None,
             hardlink_id: None,
             symlink_id: None,
+            symlink_hardlink_id: None,
             child_directory_id: None,
         };
         let file_id = fixture.repo.create_file(
@@ -523,6 +528,185 @@ fn namespace_lookups_preserve_entry_identity_and_metadata() -> Result<(), String
     assert_eq!(repo.get_file_id(&missing)?, None);
     assert_eq!(repo.get_hardlink_id(&missing)?, None);
     assert_eq!(repo.get_symlink_id(&missing)?, None);
+    Ok(())
+}
+
+#[test]
+fn symlink_hardlink_aliases_resolve_to_the_same_inode() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let mut fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let symlink_id = fixture.symlink_id.unwrap();
+    let alias_name = unique_name("symlink_hardlink_alias");
+    let alias_id =
+        repo.create_symlink_hardlink(symlink_id, Some(fixture.directory_id), &alias_name)?;
+    fixture.symlink_hardlink_id = Some(alias_id);
+
+    let original_path = format!("/{}/symlink", fixture.directory_name);
+    let alias_path = format!("/{}/{alias_name}", fixture.directory_name);
+    assert_eq!(repo.count_symlink_links(symlink_id)?, 2);
+    assert_eq!(repo.get_symlink_id(&alias_path)?, Some(symlink_id));
+    assert_eq!(
+        repo.get_symlink_hardlink_symlink_id(alias_id)?,
+        Some(symlink_id)
+    );
+    assert_eq!(
+        repo.resolve_path(&alias_path)?,
+        ResolvedPath {
+            parent_id: Some(fixture.directory_id),
+            kind: Some("symlink_hardlink".to_string()),
+            entry_id: Some(alias_id),
+        }
+    );
+    repo.store_xattr_value_for_owner("symlink", symlink_id, "user.alias_probe", b"shared")?;
+    assert_eq!(
+        repo.fetch_xattr_value(&alias_path, "user.alias_probe")?,
+        Some(b"shared".to_vec())
+    );
+
+    let original_attrs = repo.fetch_path_attrs_blob(&original_path)?.unwrap();
+    let alias_attrs = repo.fetch_path_attrs_blob(&alias_path)?.unwrap();
+    let original_fields = original_attrs.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let alias_fields = alias_attrs.split(|byte| *byte == 0).collect::<Vec<_>>();
+    assert_eq!(original_fields[0], b"symlink");
+    assert_eq!(alias_fields[0], b"symlink_hardlink");
+    assert_eq!(original_fields[1..], alias_fields[1..]);
+
+    let entries = repo.list_directory_entry_metadata(&format!("/{}", fixture.directory_name))?;
+    assert!(entries.iter().any(|entry| {
+        entry.name == alias_name
+            && entry.kind == "symlink_hardlink"
+            && entry.entry_id == alias_id
+            && entry.inode_seed
+                == entries
+                    .iter()
+                    .find(|entry| entry.name == "symlink")
+                    .unwrap()
+                    .inode_seed
+    }));
+    let names = repo
+        .list_directory_entries_blob(&format!("/{}", fixture.directory_name))?
+        .unwrap();
+    assert!(names
+        .split(|byte| *byte == 0)
+        .any(|name| name == alias_name.as_bytes()));
+    assert_eq!(repo.count_directory_children(fixture.directory_id)?, 4);
+
+    let renamed_alias_name = unique_name("symlink_hardlink_renamed");
+    assert_eq!(
+        repo.rename_namespace_replace_with_ownership_guard(
+            RenameNamespaceSource::SymlinkHardlink {
+                hardlink_id: alias_id,
+                symlink_id,
+            },
+            Some(fixture.directory_id),
+            &alias_name,
+            Some(fixture.directory_id),
+            &renamed_alias_name,
+            None,
+            1000,
+        )?,
+        fod_rust_hotpath::pg::RenameFileReplaceOutcome::Applied
+    );
+    assert_eq!(repo.get_symlink_id(&alias_path)?, None);
+    let alias_path = format!("/{}/{renamed_alias_name}", fixture.directory_name);
+    assert_eq!(repo.get_symlink_id(&alias_path)?, Some(symlink_id));
+
+    repo.unlink_symlink_entry(symlink_id, Some(fixture.directory_id), "symlink", 1000)?;
+    assert_eq!(repo.get_symlink_id(&original_path)?, None);
+    assert_eq!(repo.get_symlink_id(&alias_path)?, Some(symlink_id));
+    assert_eq!(
+        repo.resolve_path(&alias_path)?.kind.as_deref(),
+        Some("symlink")
+    );
+    assert_eq!(repo.count_symlink_links(symlink_id)?, 1);
+
+    let replaced_symlink_name = unique_name("symlink_hardlink_replace_target");
+    let replaced_symlink_id = repo.create_symlink(
+        Some(fixture.directory_id),
+        &replaced_symlink_name,
+        "replaced-target",
+        1000,
+        1000,
+        &unique_name("symlink_hardlink_replaced_seed"),
+    )?;
+    let replaced_alias_name = unique_name("symlink_hardlink_replace_alias");
+    repo.create_symlink_hardlink(
+        replaced_symlink_id,
+        Some(fixture.directory_id),
+        &replaced_alias_name,
+    )?;
+    assert_eq!(
+        repo.rename_namespace_replace_with_ownership_guard(
+            RenameNamespaceSource::Symlink { symlink_id },
+            Some(fixture.directory_id),
+            &renamed_alias_name,
+            Some(fixture.directory_id),
+            &replaced_symlink_name,
+            Some(fod_rust_hotpath::pg::RenameNamespaceTarget::Symlink {
+                symlink_id: replaced_symlink_id,
+            }),
+            1000,
+        )?,
+        fod_rust_hotpath::pg::RenameFileReplaceOutcome::Applied
+    );
+    assert_eq!(
+        repo.get_symlink_id(&format!(
+            "/{}/{replaced_alias_name}",
+            fixture.directory_name
+        ))?,
+        Some(replaced_symlink_id)
+    );
+    repo.unlink_symlink_entry(
+        replaced_symlink_id,
+        Some(fixture.directory_id),
+        &replaced_alias_name,
+        1000,
+    )?;
+    let alias_path = format!("/{}/{}", fixture.directory_name, replaced_symlink_name);
+    assert_eq!(repo.get_symlink_id(&alias_path)?, Some(symlink_id));
+
+    let second_alias_name = unique_name("symlink_hardlink_unlink");
+    let second_alias_id =
+        repo.create_symlink_hardlink(symlink_id, Some(fixture.directory_id), &second_alias_name)?;
+    fixture.symlink_hardlink_id = Some(second_alias_id);
+    repo.unlink_symlink_hardlink_entry_for_subject_acl(
+        second_alias_id,
+        Some(fixture.directory_id),
+        &second_alias_name,
+        1000,
+        1000,
+        &[],
+        false,
+    )?;
+    assert_eq!(repo.count_symlink_links(symlink_id)?, 1);
+    assert_eq!(
+        repo.get_symlink_id(&format!("/{}/{second_alias_name}", fixture.directory_name))?,
+        None
+    );
+    let root_alias_name = unique_name("symlink_hardlink_root");
+    let root_alias_id = repo.create_symlink_hardlink(symlink_id, None, &root_alias_name)?;
+    let root_alias_path = format!("/{root_alias_name}");
+    assert_eq!(repo.get_symlink_id(&root_alias_path)?, Some(symlink_id));
+    assert_eq!(
+        repo.resolve_path(&root_alias_path)?.parent_id,
+        None,
+        "root aliases must retain SQL NULL as their parent"
+    );
+    assert!(repo
+        .list_directory_entry_metadata("/")?
+        .iter()
+        .any(|entry| entry.name == root_alias_name && entry.entry_id == root_alias_id));
+    repo.unlink_symlink_hardlink_entry_for_subject_acl(
+        root_alias_id,
+        None,
+        &root_alias_name,
+        1000,
+        1000,
+        &[],
+        false,
+    )?;
+    assert_eq!(repo.count_symlink_links(symlink_id)?, 1);
     Ok(())
 }
 

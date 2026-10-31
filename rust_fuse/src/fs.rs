@@ -2765,10 +2765,10 @@ impl FodFuse {
         if inode_seed.trim().is_empty() {
             return Err(EIO);
         }
-        let normalized_obj_type = if obj_type == "hardlink" {
-            "file"
-        } else {
-            obj_type
+        let normalized_obj_type = match obj_type {
+            "hardlink" => "file",
+            "symlink_hardlink" => "symlink",
+            _ => obj_type,
         };
         let payload = format!("{normalized_obj_type}:{inode_seed}");
         let inode = Self::hash_inode64(payload.as_bytes()) & i64::MAX as u64;
@@ -2848,7 +2848,7 @@ impl FodFuse {
     ) -> Result<FileType, libc::c_int> {
         match entry_kind {
             "dir" => Ok(FileType::Directory),
-            "symlink" => Ok(FileType::Symlink),
+            "symlink" | "symlink_hardlink" => Ok(FileType::Symlink),
             "file" | "hardlink" => match special_type {
                 Some(special_type) => Self::file_type_from_special(special_type).ok_or(EIO),
                 None => Ok(FileType::RegularFile),
@@ -3963,7 +3963,7 @@ impl FodFuse {
             return Ok(None);
         }
         let obj_type = fields[0].clone();
-        let mut file_attr = if obj_type == "symlink" {
+        let mut file_attr = if matches!(obj_type.as_str(), "symlink" | "symlink_hardlink") {
             if fields.len() < 9 {
                 return Err(EIO);
             }
@@ -3986,7 +3986,7 @@ impl FodFuse {
                 crtime: Self::parse_time(&chg_date)?,
                 kind: FileType::Symlink,
                 perm: 0o777,
-                nlink: 1,
+                nlink: Self::fuse_nlink(repo.count_symlink_links(raw_inode).map_err(|_| EIO)?)?,
                 uid,
                 gid,
                 rdev: 0,
@@ -4079,12 +4079,17 @@ impl FodFuse {
                     .ok_or(ENOENT)?,
             ),
             "dir" => ("dir".to_string(), if is_root { 0 } else { raw_inode }),
-            "symlink" => ("symlink".to_string(), raw_inode),
+            "symlink" | "symlink_hardlink" => ("symlink".to_string(), raw_inode),
             _ => return Err(EIO),
         };
         Ok(Some(ParsedAttrs {
             file_attr,
-            inode_seed: fields[if obj_type == "symlink" { 8 } else { 9 }].clone(),
+            inode_seed: fields[if matches!(obj_type.as_str(), "symlink" | "symlink_hardlink") {
+                8
+            } else {
+                9
+            }]
+            .clone(),
             xattr_owner_kind,
             xattr_owner_id,
         }))
@@ -4527,12 +4532,26 @@ impl FodFuse {
                 }
             }
             FileType::Symlink => match self.repo.authoritative_view().resolve_path(path) {
-                Ok(resolved) if resolved.kind.as_deref() == Some("symlink") => match resolved
-                    .entry_id
+                Ok(resolved)
+                    if matches!(
+                        resolved.kind.as_deref(),
+                        Some("symlink" | "symlink_hardlink")
+                    ) =>
                 {
-                    Some(symlink_id) => self.repo.update_symlink_access_date(symlink_id, &atime),
-                    None => Ok(()),
-                },
+                    let symlink_id = match (resolved.kind.as_deref(), resolved.entry_id) {
+                        (Some("symlink"), Some(id)) => Some(id),
+                        (Some("symlink_hardlink"), Some(id)) => {
+                            self.repo.get_symlink_hardlink_symlink_id(id).ok().flatten()
+                        }
+                        _ => None,
+                    };
+                    match symlink_id {
+                        Some(symlink_id) => {
+                            self.repo.update_symlink_access_date(symlink_id, &atime)
+                        }
+                        None => Ok(()),
+                    }
+                }
                 Ok(_) => Ok(()),
                 Err(_) => Ok(()),
             },
@@ -8751,6 +8770,18 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 }
+            } else if kind == "symlink_hardlink" {
+                match entry_id
+                    .map(|id| authority.get_symlink_hardlink_symlink_id(id))
+                    .transpose()
+                {
+                    Ok(Some(Some(id))) => Some(("symlink", id)),
+                    Ok(_) => None,
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
             } else {
                 entry_id.map(|id| (kind.as_str(), id))
             };
@@ -8835,6 +8866,20 @@ impl Filesystem for FodFuse {
                     Some(id) => ("symlink", id),
                     None => {
                         fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                },
+                "symlink_hardlink" => match entry_id
+                    .map(|id| authority.get_symlink_hardlink_symlink_id(id))
+                    .transpose()
+                {
+                    Ok(Some(Some(id))) => ("symlink", id),
+                    Ok(_) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
                         return;
                     }
                 },
@@ -9140,6 +9185,18 @@ impl Filesystem for FodFuse {
                     self.acl_enabled,
                 ),
                 None => Err("missing symlink id".to_string()),
+            },
+            Some("symlink_hardlink") => match entry_id {
+                Some(alias_id) => self.repo.unlink_symlink_hardlink_entry_for_subject_acl(
+                    alias_id,
+                    parent_id,
+                    name.to_string_lossy().as_ref(),
+                    subject.uid,
+                    subject.gid,
+                    &subject.groups.iter().copied().collect::<Vec<_>>(),
+                    self.acl_enabled,
+                ),
+                None => Err("missing symlink hardlink id".to_string()),
             },
             Some("dir") => {
                 self.log_request_error(
@@ -9512,6 +9569,24 @@ impl Filesystem for FodFuse {
                     (Some("symlink"), Some(symlink_id)) => {
                         RenameNamespaceSource::Symlink { symlink_id }
                     }
+                    (Some("symlink_hardlink"), Some(hardlink_id)) => {
+                        let symlink_id =
+                            match authority.get_symlink_hardlink_symlink_id(hardlink_id) {
+                                Ok(Some(symlink_id)) => symlink_id,
+                                Ok(None) => {
+                                    fuse_reply_error!(reply, ENOENT);
+                                    return;
+                                }
+                                Err(_) => {
+                                    fuse_reply_error!(reply, EIO);
+                                    return;
+                                }
+                            };
+                        RenameNamespaceSource::SymlinkHardlink {
+                            hardlink_id,
+                            symlink_id,
+                        }
+                    }
                     (Some("dir"), Some(directory_id)) => {
                         RenameNamespaceSource::Directory { directory_id }
                     }
@@ -9604,6 +9679,24 @@ impl Filesystem for FodFuse {
                     }
                     (Some("symlink"), Some(symlink_id)) => {
                         Some(RenameNamespaceTarget::Symlink { symlink_id })
+                    }
+                    (Some("symlink_hardlink"), Some(hardlink_id)) => {
+                        let symlink_id =
+                            match authority.get_symlink_hardlink_symlink_id(hardlink_id) {
+                                Ok(Some(symlink_id)) => symlink_id,
+                                Ok(None) => {
+                                    fuse_reply_error!(reply, ENOENT);
+                                    return;
+                                }
+                                Err(_) => {
+                                    fuse_reply_error!(reply, EIO);
+                                    return;
+                                }
+                            };
+                        Some(RenameNamespaceTarget::SymlinkHardlink {
+                            hardlink_id,
+                            symlink_id,
+                        })
                     }
                     (Some("dir"), Some(directory_id)) => {
                         Some(RenameNamespaceTarget::Directory { directory_id })
@@ -11441,11 +11534,23 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let source_file_id = match (source_entry.kind.as_deref(), source_entry.entry_id) {
-            (Some("file"), Some(file_id)) => Some(file_id),
+        let source_entry_id = match (source_entry.kind.as_deref(), source_entry.entry_id) {
+            (Some("file"), Some(file_id)) => Some(("file", file_id)),
             (Some("hardlink"), Some(hardlink_id)) => {
                 match authority.get_hardlink_file_id(hardlink_id) {
-                    Ok(file_id) => file_id,
+                    Ok(Some(file_id)) => Some(("file", file_id)),
+                    Ok(None) => None,
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
+            }
+            (Some("symlink"), Some(symlink_id)) => Some(("symlink", symlink_id)),
+            (Some("symlink_hardlink"), Some(hardlink_id)) => {
+                match authority.get_symlink_hardlink_symlink_id(hardlink_id) {
+                    Ok(Some(symlink_id)) => Some(("symlink", symlink_id)),
+                    Ok(None) => None,
                     Err(_) => {
                         fuse_reply_error!(reply, EIO);
                         return;
@@ -11454,11 +11559,12 @@ impl Filesystem for FodFuse {
             }
             _ => None,
         };
-        let Some(source_file_id) = source_file_id else {
+        let Some((source_kind, source_id)) = source_entry_id else {
             fuse_reply_error!(reply, ENOENT);
             return;
         };
-        match self.attrs_for_open_file_id(source_file_id) {
+        let source_attrs = self.attrs_for_entry_id_from_repo(&authority, source_kind, source_id);
+        match source_attrs {
             Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => {}
             Ok(_) => {
                 fuse_reply_error!(reply, ENOENT);
@@ -11485,20 +11591,41 @@ impl Filesystem for FodFuse {
             }
         };
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
-        let create_result = if self.acl_enabled {
+        let target_name = newname.to_string_lossy();
+        let create_result = if source_kind == "symlink" {
+            if self.acl_enabled {
+                self.repo.create_symlink_hardlink_for_subject_with_acl(
+                    source_id,
+                    new_parent_id,
+                    &target_name,
+                    subject.uid,
+                    subject.gid,
+                    &supplementary_groups,
+                )
+            } else {
+                self.repo.create_symlink_hardlink_for_subject(
+                    source_id,
+                    new_parent_id,
+                    &target_name,
+                    subject.uid,
+                    subject.gid,
+                    &supplementary_groups,
+                )
+            }
+        } else if self.acl_enabled {
             self.repo.create_hardlink_for_subject_with_acl(
-                source_file_id,
+                source_id,
                 new_parent_id,
-                newname.to_string_lossy().as_ref(),
+                &target_name,
                 subject.uid,
                 subject.gid,
                 &supplementary_groups,
             )
         } else {
             self.repo.create_hardlink_for_subject(
-                source_file_id,
+                source_id,
                 new_parent_id,
-                newname.to_string_lossy().as_ref(),
+                &target_name,
                 subject.uid,
                 subject.gid,
                 &supplementary_groups,
@@ -11512,7 +11639,7 @@ impl Filesystem for FodFuse {
                     fuse_reply_error!(reply, errno);
                     return;
                 }
-                match self.attrs_for_open_file_id(source_file_id) {
+                match self.attrs_for_entry_id_from_repo(&authority, source_kind, source_id) {
                     Ok(Some(attrs)) => {
                         self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         self.invalidate_statfs_cache();

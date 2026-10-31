@@ -373,6 +373,15 @@ impl DbRepo {
                 Some(entry_id) => ("symlink", entry_id),
                 None => return Ok(None),
             },
+            Some("symlink_hardlink") => {
+                let Some(entry_id) = resolved.entry_id else {
+                    return Ok(None);
+                };
+                let Some(symlink_id) = self.get_symlink_hardlink_symlink_id(entry_id)? else {
+                    return Ok(None);
+                };
+                ("symlink", symlink_id)
+            }
             _ => return Ok(None),
         };
 

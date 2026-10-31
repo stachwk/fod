@@ -1,12 +1,25 @@
 # Hard links to symlink inodes
 
-Status: design for a Linux compatibility gap; implementation remains pending.
+Status: implementation in progress (FOD 3.4.461, schema 38).
 
 Linux `link()` can add a directory entry for the symlink inode itself. POSIX
 leaves the behavior when the source names a symlink implementation-defined.
-FOD currently rejects this source with `ENOENT`. A local probe on Linux
-6.17.0-41-generic created two names with the same `lstat().st_ino`, symlink
-type, and `st_nlink == 2`.
+A local probe on Linux 6.17.0-41-generic created two names with the same
+`lstat().st_ino`, symlink type, and `st_nlink == 2`.
+
+Implemented so far: migration 38 and fresh-install schema; PostgreSQL
+transactional link and unlink operations; path lookup, directory listings,
+shared inode attributes, xattr ownership and link counts; alias rename and
+canonical-name promotion on unlink or replacement. The focused PostgreSQL
+integration test passed on a disposable PostgreSQL 16.15 database built with
+`--with-blocksize=32` (`SHOW block_size = 32768`). Rust source and test targets
+compile. The FUSE package was compile-checked with its pure-Rust mount backend
+because this host has libfuse 3.17.4, below FOD's required 3.18.2 minimum.
+
+Still required: mounted Linux/libfuse regression coverage, root-path cases,
+full errno precedence checks, two-mount races, and validation of cached inode
+paths after each link mutation. Do not treat the behavior as fully verified
+until those checks pass.
 
 ## Required model
 

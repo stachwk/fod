@@ -10,6 +10,13 @@ still in progress and does not claim general POSIX conformance. The enforced
 Linux/libfuse minimums and their validation boundary are in
 [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
+FOD 3.4.461 raises the required schema to 38 and introduces
+`symlink_hardlinks`, directory-entry aliases for shared symlink inodes. Link,
+lookup/readdir, shared metadata and xattrs, `st_nlink`, unlink promotion and
+rename promotion are implemented in progress; mounted Linux/libfuse coverage
+and cross-mount race verification remain open. See
+[`SYMLINK_HARDLINK_DESIGN.md`](SYMLINK_HARDLINK_DESIGN.md).
+
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and
@@ -499,9 +506,10 @@ operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
 The schema-admission gate first shipped in FOD 3.4.443 with schema version 34;
-FOD 3.4.451 currently requires schema version 37. Migrations 36 and 37
-normalize legacy POSIX modes and widen the entity-ID graph. The latter changes
-column and index types, so run production upgrades only in a maintenance window.
+FOD 3.4.461 currently requires schema version 38. Migrations 36 and 37
+normalize legacy POSIX modes and widen the entity-ID graph; migration 38 adds
+the shared-symlink alias table. Migration 37 changes column and index types,
+so run production upgrades only in a maintenance window.
 Before applying migrations, `mkfs.fod upgrade` raises the database client floor
 and sets `schema_version.upgrade_in_progress` transactionally. Mount admission checks
 that marker; client-session registration uses a shared PostgreSQL advisory
@@ -509,8 +517,10 @@ lock, while upgrades hold its exclusive counterpart and refuse to proceed when
 unexpired FOD sessions exist. A PostgreSQL trigger also rejects legacy client
 session inserts while the gate is set. The final schema number, release floor,
 and cleared marker publish in one transaction. A physical standby below schema
-37 rejects the new client until WAL replay catches up. Replica startup reads the
-client floor and upgrade marker from the writable primary, so WAL lag cannot
+38 rejects the new client until WAL replay catches up. Migration 38 adds the
+PostgreSQL table for additional directory entries that share a symlink inode.
+Replica startup reads the client floor and upgrade marker from the writable
+primary, so WAL lag cannot
 admit an outdated client. Client-session registration also rechecks both gates
 under the shared advisory lock, closing the race between the startup snapshot
 and session creation. Interrupted upgrades leave the marker set so operators can

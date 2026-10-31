@@ -18,15 +18,18 @@ Reading guide:
   Na lokalnym Linuksie 6.17 wywołanie `os.link(source, alias,
   follow_symlinks=False)` dla `source` będącego symlinkiem tworzy drugi wpis
   tego samego inode (`lstat()` pokazuje `S_IFLNK`, identyczne inode i `nlink=2`).
-  Callback `FodFuse::link()` w `rust_fuse/src/fs.rs` obsługuje wyłącznie wpisy
-  `file` i `hardlink`; symlink kończy się `ENOENT`. POSIX pozostawia zachowanie
-  `link()` dla symlinków implementacji, więc to potwierdzona różnica względem
-  Linuksa, a nie stwierdzone naruszenie POSIX. Obsługa wymaga modelu aliasów
-  symlinków w PostgreSQL oraz zgodnej tożsamości inode, `nlink`, lookup,
-  readdir, rename, unlink i promocji aliasu po usunięciu wpisu źródłowego.
-  Model transakcyjny i wymagane regresje opisuje
-  [`docs/SYMLINK_HARDLINK_DESIGN.md`](docs/SYMLINK_HARDLINK_DESIGN.md); nie
-  utożsamiać linku do symlinka z linkiem do jego celu.
+  FOD 3.4.461 dodaje tabelę `symlink_hardlinks` (migracja 38) i wstępną
+  obsługę PostgreSQL/FUSE: aliasy współdzielą inode, target, metadane i xattry;
+  działają lookup, readdir, `st_nlink`, `link()`, `unlink()` z promocją nazwy
+  oraz rename aliasu i zastępowanie symlinka z promocją jego aliasu. Test
+  integracyjny warstwy PostgreSQL przeszedł na odizolowanej bazie PostgreSQL
+  16.15 z `BLCKSZ=32KiB`. Nadal wymagane są testy montowane na libfuse 3.18.2+
+  i Linux 6.17, testy wyścigów na dwóch mountach, pełna weryfikacja errno,
+  ścieżek roota i usuwania ostatniego linku oraz kontrola obsługi zapamiętanych
+  ścieżek inode. Zachowanie `link()` dla symlinka pozostaje
+  implementacyjnie zdefiniowane przez POSIX; to zgodność z Linuksem, nie
+  stwierdzone naruszenie POSIX. Szczegóły i akceptacja są w
+  [`docs/SYMLINK_HARDLINK_DESIGN.md`](docs/SYMLINK_HARDLINK_DESIGN.md).
 
 - [x] **`opendir()` nie może zwracać inode roota jako `d_ino` wpisu `..` po utracie mapy rodzica.**
   Callback brał inode rodzica wyłącznie z lokalnego cache ścieżek i w razie

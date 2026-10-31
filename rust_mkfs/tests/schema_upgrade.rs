@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 37;
+const SCHEMA_VERSION: u64 = 38;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -252,6 +252,7 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                         ('files', 'files_name_octet_length_check'),
                         ('hardlinks', 'hardlinks_name_octet_length_check'),
                         ('symlinks', 'symlinks_name_octet_length_check'),
+                        ('symlink_hardlinks', 'symlink_hardlinks_name_octet_length_check'),
                         ('xattrs', 'xattrs_name_octet_length_check'),
                         ('destination_write_leases', 'destination_write_leases_name_octet_length_check')
                     ) AS required_checks(table_name, constraint_name)
@@ -449,7 +450,7 @@ fn assert_latest_payload_schema(conn: &DbConn) {
         )
         .expect("count widened serial sequences")
         .expect("sequence count");
-    assert_eq!(widened_sequences, 20);
+    assert_eq!(widened_sequences, 21);
 
     let preserved_foreign_keys = conn
         .query_scalar_u64(
@@ -458,7 +459,7 @@ fn assert_latest_payload_schema(conn: &DbConn) {
         )
         .expect("count restored schema foreign keys")
         .expect("foreign key count");
-    assert_eq!(preserved_foreign_keys, 29);
+    assert_eq!(preserved_foreign_keys, 31);
 
     let preserved_triggers = conn
         .query_scalar_u64(
@@ -469,7 +470,7 @@ fn assert_latest_payload_schema(conn: &DbConn) {
         )
         .expect("count restored schema triggers")
         .expect("trigger count");
-    assert_eq!(preserved_triggers, 7);
+    assert_eq!(preserved_triggers, 8);
 
     conn.exec("BEGIN; SAVEPOINT bigint_identifier_probe")
         .expect("begin bigint identifier probe");
@@ -1134,10 +1135,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 37",
+        "FOD schema version: 38",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 37",
+        "Latest migration version: 38",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -1178,6 +1179,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0035: 0035_hash_long_indexer_paths.sql",
         "0036: 0036_normalize_posix_mode_values.sql",
         "0037: 0037_widen_entity_identifiers.sql",
+        "0038: 0038_symlink_hardlinks.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -1198,8 +1200,8 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
          ALTER TABLE symlinks DROP CONSTRAINT symlinks_name_octet_length_check; \
          ALTER TABLE xattrs DROP CONSTRAINT xattrs_name_octet_length_check; \
          ALTER TABLE destination_write_leases DROP CONSTRAINT destination_write_leases_name_octet_length_check; \
-         ALTER TABLE files DROP CONSTRAINT files_mode_octal_check; \
-         ALTER TABLE directories DROP CONSTRAINT directories_mode_octal_check; \
+         ALTER TABLE files DROP CONSTRAINT IF EXISTS files_mode_octal_check; \
+         ALTER TABLE directories DROP CONSTRAINT IF EXISTS directories_mode_octal_check; \
          ALTER TABLE schema_version DROP COLUMN upgrade_in_progress; \
          UPDATE schema_version SET schema_number = 31",
     )
@@ -1379,10 +1381,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 37",
+        "Latest migration version: 38",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037, 0038",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -1553,7 +1555,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 37"),
+        status_before_text.contains("Latest migration version: 38"),
         "{status_before_text}"
     );
     assert!(
@@ -1566,7 +1568,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     );
     assert!(
         status_before_text.contains(
-            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037"
+            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037, 0038"
         ),
         "{status_before_text}"
     );
@@ -1615,7 +1617,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 37"),
+        status_broken_text.contains("FOD schema version: 38"),
         "{status_broken_text}"
     );
     assert!(

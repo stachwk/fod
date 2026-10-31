@@ -113,6 +113,14 @@ CREATE TABLE IF NOT EXISTS symlinks (
     creation_date TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS symlink_hardlinks (
+    id_symlink_hardlink BIGSERIAL PRIMARY KEY,
+    id_symlink BIGINT NOT NULL REFERENCES symlinks(id_symlink),
+    id_parent BIGINT REFERENCES directories(id_directory),
+    name VARCHAR(255) NOT NULL
+        CONSTRAINT symlink_hardlinks_name_octet_length_check CHECK (octet_length(name) <= 255)
+);
+
 CREATE TABLE IF NOT EXISTS data_blocks (
     id_block BIGSERIAL PRIMARY KEY,
     data_object_id BIGINT NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
@@ -195,10 +203,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_hardlinks_root_name ON hardlinks (name) W
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_hardlinks_parent_name ON hardlinks (id_directory, name) WHERE id_directory IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_symlinks_root_name ON symlinks (name) WHERE id_parent IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_symlinks_parent_name ON symlinks (id_parent, name) WHERE id_parent IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_symlink_hardlinks_root_name ON symlink_hardlinks (name) WHERE id_parent IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_symlink_hardlinks_parent_name ON symlink_hardlinks (id_parent, name) WHERE id_parent IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_directories_parent_id ON directories (id_parent);
 CREATE INDEX IF NOT EXISTS idx_files_directory_id ON files (id_directory);
 CREATE INDEX IF NOT EXISTS idx_hardlinks_directory_id ON hardlinks (id_directory);
 CREATE INDEX IF NOT EXISTS idx_symlinks_parent_id ON symlinks (id_parent);
+CREATE INDEX IF NOT EXISTS idx_symlink_hardlinks_parent_id ON symlink_hardlinks (id_parent);
+CREATE INDEX IF NOT EXISTS idx_symlink_hardlinks_symlink_id ON symlink_hardlinks (id_symlink);
 CREATE INDEX IF NOT EXISTS idx_hardlinks_file_id ON hardlinks (id_file);
 CREATE INDEX IF NOT EXISTS idx_xattrs_owner ON xattrs (owner_kind, owner_id);
 CREATE INDEX IF NOT EXISTS idx_lock_leases_resource ON lock_leases (resource_kind, resource_id, lease_kind);
@@ -706,7 +718,7 @@ DECLARE
     new_visible BOOLEAN := TRUE;
     namespace_changed BOOLEAN := TRUE;
 BEGIN
-    IF TG_TABLE_NAME IN ('directories', 'symlinks') THEN
+    IF TG_TABLE_NAME IN ('directories', 'symlinks', 'symlink_hardlinks') THEN
         parent_column := 'id_parent';
     ELSE
         parent_column := 'id_directory';
@@ -770,4 +782,9 @@ FOR EACH ROW EXECUTE FUNCTION fod_touch_namespace_parents();
 DROP TRIGGER IF EXISTS fod_symlinks_touch_parent ON symlinks;
 CREATE TRIGGER fod_symlinks_touch_parent
 AFTER INSERT OR DELETE OR UPDATE OF id_parent, name ON symlinks
+FOR EACH ROW EXECUTE FUNCTION fod_touch_namespace_parents();
+
+DROP TRIGGER IF EXISTS fod_symlink_hardlinks_touch_parent ON symlink_hardlinks;
+CREATE TRIGGER fod_symlink_hardlinks_touch_parent
+AFTER INSERT OR DELETE OR UPDATE OF id_parent, name ON symlink_hardlinks
 FOR EACH ROW EXECUTE FUNCTION fod_touch_namespace_parents();

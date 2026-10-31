@@ -72,6 +72,10 @@ impl DbRepo {
             SELECT 1
             FROM symlinks
             WHERE id_parent = $1
+            UNION ALL
+            SELECT 1
+            FROM symlink_hardlinks
+            WHERE id_parent = $1
             LIMIT 1
             ",
         )
@@ -94,6 +98,7 @@ impl DbRepo {
               + (SELECT COUNT(*) FROM files WHERE id_directory = $1 AND NOT unlinked)
               + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
               + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
+              + (SELECT COUNT(*) FROM symlink_hardlinks WHERE id_parent = $1)
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -163,6 +168,21 @@ impl DbRepo {
                 .parse::<u64>()
                 .map_err(|_| "invalid symlink count".to_string())?;
             Ok(value)
+        })
+    }
+
+    pub fn count_symlink_links(&self, symlink_id: u64) -> Result<u64, String> {
+        let sql = CString::new("SELECT 1 + COUNT(*) FROM symlink_hardlinks WHERE id_symlink = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let symlink_id = CString::new(symlink_id.to_string())
+            .map_err(|_| "symlink id contains NUL byte".to_string())?;
+
+        self.with_read_connection(|conn| unsafe {
+            let res = exec_params(conn, &sql, &[&symlink_id])?;
+            fetch_single_text(res)?
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid symlink link count".to_string())
         })
     }
 
