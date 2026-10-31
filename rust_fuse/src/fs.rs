@@ -3863,13 +3863,22 @@ impl FodFuse {
             .and_then(|mut guard| guard.remove(path));
 
         if let Some(ino) = removed_ino {
+            let replacement_path = self.path_to_inode.read().ok().and_then(|guard| {
+                guard.iter().find_map(|(candidate, candidate_ino)| {
+                    (*candidate_ino == ino).then(|| candidate.clone())
+                })
+            });
             if let Ok(mut inode_guard) = self.inode_to_path.write() {
                 let should_remove = inode_guard
                     .get(&ino)
                     .map(|cached_path| cached_path == path)
                     .unwrap_or(false);
                 if should_remove {
-                    inode_guard.remove(&ino);
+                    if let Some(replacement_path) = replacement_path {
+                        inode_guard.insert(ino, replacement_path);
+                    } else {
+                        inode_guard.remove(&ino);
+                    }
                 }
             }
         }
@@ -3909,6 +3918,36 @@ impl FodFuse {
         let Some(blob) = blob else {
             return Ok(None);
         };
+        self.parse_attrs_blob(repo, &blob, Self::normalize_path(path) == "/")
+    }
+
+    fn attrs_for_entry_id_from_repo(
+        &self,
+        repo: &DbRepo,
+        kind: &str,
+        entry_id: u64,
+    ) -> Result<Option<ParsedAttrs>, libc::c_int> {
+        let blob = repo
+            .fetch_entry_attrs_blob_by_id(kind, entry_id)
+            .map_err(|err| {
+                warn!(
+                    "FOD entry attributes query failed kind={} entry_id={} err={}",
+                    kind, entry_id, err
+                );
+                EIO
+            })?;
+        let Some(blob) = blob else {
+            return Ok(None);
+        };
+        self.parse_attrs_blob(repo, &blob, false)
+    }
+
+    fn parse_attrs_blob(
+        &self,
+        repo: &DbRepo,
+        blob: &[u8],
+        is_root: bool,
+    ) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let fields = Self::decode_nul_fields(&blob);
         if fields.is_empty() {
             return Ok(None);
@@ -4017,7 +4056,7 @@ impl FodFuse {
                 blksize: self.block_size as u32,
             }
         };
-        if Self::normalize_path(path) == "/" {
+        if is_root {
             file_attr.ino = INodeNo::ROOT;
         }
         let raw_inode = fields[1].parse::<u64>().map_err(|_| EIO)?;
@@ -4029,14 +4068,7 @@ impl FodFuse {
                     .map_err(|_| EIO)?
                     .ok_or(ENOENT)?,
             ),
-            "dir" => (
-                "dir".to_string(),
-                if Self::normalize_path(path) == "/" {
-                    0
-                } else {
-                    raw_inode
-                },
-            ),
+            "dir" => ("dir".to_string(), if is_root { 0 } else { raw_inode }),
             "symlink" => ("symlink".to_string(), raw_inode),
             _ => return Err(EIO),
         };
@@ -4247,11 +4279,24 @@ impl FodFuse {
 
     fn register_lookup_path(&self, path: &str, ino: u64) {
         if let Ok(mut refs) = self.lookup_refs.lock() {
-            self.register_path(path, ino);
+            if let Ok(mut path_guard) = self.path_to_inode.write() {
+                path_guard.insert(path.to_string(), ino);
+            }
+            if let Ok(mut inode_guard) = self.inode_to_path.write() {
+                // Hardlinks share an inode. Keep the existing live path as
+                // its canonical reverse mapping instead of replacing it with
+                // whichever alias was looked up most recently.
+                inode_guard.entry(ino).or_insert_with(|| path.to_string());
+            }
             let count = refs.entry(ino).or_insert(0);
             *count = count.saturating_add(1);
         } else {
-            self.register_path(path, ino);
+            if let Ok(mut path_guard) = self.path_to_inode.write() {
+                path_guard.insert(path.to_string(), ino);
+            }
+            if let Ok(mut inode_guard) = self.inode_to_path.write() {
+                inode_guard.entry(ino).or_insert_with(|| path.to_string());
+            }
         }
     }
 
@@ -8627,7 +8672,14 @@ impl Filesystem for FodFuse {
                     Some(directory_id),
                 );
                 self.invalidate_statfs_cache();
-                match self.lookup_path_from_authority(&child_path) {
+                #[cfg(feature = "integration-test-hooks")]
+                if let Err(errno) = Self::test_create_after_commit_before_attrs_barrier(&child_path)
+                {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+                let authority = self.repo.authoritative_view();
+                match self.attrs_for_entry_id_from_repo(&authority, "dir", directory_id) {
                     Ok(Some(attrs)) => {
                         self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         debug!(
@@ -8645,7 +8697,16 @@ impl Filesystem for FodFuse {
                     Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
-            Err(err) => fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err)),
+            Err(err) => {
+                let errno = crate::errno::namespace_mutation_errno(&err);
+                self.log_request_error(
+                    req_id,
+                    "mkdir",
+                    errno,
+                    format!("child={} create err={}", child_path, err),
+                );
+                fuse_reply_error!(reply, errno);
+            }
         }
     }
 
@@ -10761,20 +10822,29 @@ impl Filesystem for FodFuse {
                 &inode_seed,
                 &supplementary_groups,
             ) {
-                Ok(_) => match self.lookup_path_from_authority(&child_path) {
-                    Ok(Some(attrs)) => {
-                        self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
-                        self.invalidate_statfs_cache();
-                        reply.entry_with_ttls(
-                            &self.attr_cache_ttl_live(),
-                            &self.entry_cache_ttl_live(),
-                            &attrs.file_attr,
-                            Generation(0),
-                        );
+                Ok(file_id) => {
+                    #[cfg(feature = "integration-test-hooks")]
+                    if let Err(errno) =
+                        Self::test_create_after_commit_before_attrs_barrier(&child_path)
+                    {
+                        fuse_reply_error!(reply, errno);
+                        return;
                     }
-                    Ok(None) => fuse_reply_error!(reply, EIO),
-                    Err(errno) => fuse_reply_error!(reply, errno),
-                },
+                    match self.attrs_for_open_file_id(file_id) {
+                        Ok(Some(attrs)) => {
+                            self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
+                            self.invalidate_statfs_cache();
+                            reply.entry_with_ttls(
+                                &self.attr_cache_ttl_live(),
+                                &self.entry_cache_ttl_live(),
+                                &attrs.file_attr,
+                                Generation(0),
+                            );
+                        }
+                        Ok(None) => fuse_reply_error!(reply, EIO),
+                        Err(errno) => fuse_reply_error!(reply, errno),
+                    }
+                }
                 Err(err) => fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err)),
             }
             return;
@@ -10848,14 +10918,19 @@ impl Filesystem for FodFuse {
                 &supplementary_groups,
             )
         };
-        match create_result {
-            Ok(_) => {}
+        let file_id = match create_result {
+            Ok(file_id) => file_id,
             Err(err) => {
                 fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err));
                 return;
             }
         };
-        match self.lookup_path_from_authority(&child_path) {
+        #[cfg(feature = "integration-test-hooks")]
+        if let Err(errno) = Self::test_create_after_commit_before_attrs_barrier(&child_path) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
+        match self.attrs_for_open_file_id(file_id) {
             Ok(Some(attrs)) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 self.invalidate_statfs_cache();
@@ -10941,20 +11016,29 @@ impl Filesystem for FodFuse {
             )
         };
         match create_result {
-            Ok(_) => match self.lookup_path_from_authority(&child_path) {
-                Ok(Some(attrs)) => {
-                    self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
-                    self.invalidate_statfs_cache();
-                    reply.entry_with_ttls(
-                        &self.attr_cache_ttl_live(),
-                        &self.entry_cache_ttl_live(),
-                        &attrs.file_attr,
-                        Generation(0),
-                    );
+            Ok(symlink_id) => {
+                #[cfg(feature = "integration-test-hooks")]
+                if let Err(errno) = Self::test_create_after_commit_before_attrs_barrier(&child_path)
+                {
+                    fuse_reply_error!(reply, errno);
+                    return;
                 }
-                Ok(None) => fuse_reply_error!(reply, EIO),
-                Err(errno) => fuse_reply_error!(reply, errno),
-            },
+                let authority = self.repo.authoritative_view();
+                match self.attrs_for_entry_id_from_repo(&authority, "symlink", symlink_id) {
+                    Ok(Some(attrs)) => {
+                        self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
+                        self.invalidate_statfs_cache();
+                        reply.entry_with_ttls(
+                            &self.attr_cache_ttl_live(),
+                            &self.entry_cache_ttl_live(),
+                            &attrs.file_attr,
+                            Generation(0),
+                        );
+                    }
+                    Ok(None) => fuse_reply_error!(reply, EIO),
+                    Err(errno) => fuse_reply_error!(reply, errno),
+                }
+            }
             Err(err) => fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err)),
         }
     }
@@ -11057,20 +11141,28 @@ impl Filesystem for FodFuse {
             )
         };
         match create_result {
-            Ok(_) => match self.lookup_path_from_authority(&child_path) {
-                Ok(Some(attrs)) => {
-                    self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
-                    self.invalidate_statfs_cache();
-                    reply.entry_with_ttls(
-                        &self.attr_cache_ttl_live(),
-                        &self.entry_cache_ttl_live(),
-                        &attrs.file_attr,
-                        Generation(0),
-                    );
+            Ok(_) => {
+                #[cfg(feature = "integration-test-hooks")]
+                if let Err(errno) = Self::test_create_after_commit_before_attrs_barrier(&child_path)
+                {
+                    fuse_reply_error!(reply, errno);
+                    return;
                 }
-                Ok(None) => fuse_reply_error!(reply, EIO),
-                Err(errno) => fuse_reply_error!(reply, errno),
-            },
+                match self.attrs_for_open_file_id(source_file_id) {
+                    Ok(Some(attrs)) => {
+                        self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
+                        self.invalidate_statfs_cache();
+                        reply.entry_with_ttls(
+                            &self.attr_cache_ttl_live(),
+                            &self.entry_cache_ttl_live(),
+                            &attrs.file_attr,
+                            Generation(0),
+                        );
+                    }
+                    Ok(None) => fuse_reply_error!(reply, EIO),
+                    Err(errno) => fuse_reply_error!(reply, errno),
+                }
+            }
             Err(err) => {
                 fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err))
             }

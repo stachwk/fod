@@ -722,3 +722,28 @@ inode. With the ID-bound reply, the original handle and replacement have
 different inode numbers and independent payloads. The full test passed on FOD
 3.4.451 in `release-lto` against a disposable PostgreSQL 16.15 database on
 Linux 6.17.0-41-generic/libfuse3 3.18.3; the database was dropped afterward.
+
+### Other namespace-create replies after concurrent path replacement
+
+The same post-commit path lookup existed in `mkdir`, `mknod`, `symlink` and
+`link`. The first three callbacks now load reply attributes by the entry ID
+returned from their committed PostgreSQL transaction. `link` loads attributes
+by its committed source file ID, so its reply always represents the inode that
+the hardlink references. If another mount deletes the new entry before the
+reply, the ID lookup finds no row and FOD returns `EIO`; it cannot return
+attributes belonging to a replacement at the same path.
+
+The ID-based metadata parser now receives root identity explicitly. An initial
+regression exposed that using an empty path as a sentinel normalized it to `/`
+and incorrectly assigned the root inode to new directory entries. The hardlink
+case also exposed that registering a second name overwrote the local reverse
+inode-to-path mapping; registration now preserves the existing path for shared
+inodes, and removing that path promotes another locally registered alias.
+
+`test_create_write_ownership.py` pauses each callback after commit, replaces the
+path from a second mount, and checks that the original callback does not return
+the replacement's identity. Its hardlink case checks that the returned alias
+uses the source inode even after the other mount replaces the alias. The full
+test passed on FOD 3.4.452 in `release-lto` against disposable PostgreSQL 16.15
+with `BLCKSZ=32KiB`, Linux 6.17.0-41-generic and libfuse3 3.18.3; the temporary
+database was dropped after the run.

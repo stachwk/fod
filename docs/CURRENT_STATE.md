@@ -27,6 +27,14 @@ directory inheritance, nested files, and umask application for files,
 directories and FIFOs when no default ACL exists. P07 remains open for other
 POSIX permission and identity requirements.
 
+FOD 3.4.452 binds `mkdir`, `mknod`, `symlink` and `link` replies to the
+PostgreSQL-committed entry or source file ID. A two-mount regression replaces
+the path between commit and reply; deleted originals return `EIO`, and hardlink
+replies keep the source inode when the alias is replaced. It also covers the
+root-inode metadata parsing and local reverse-path defects found while adding
+these cases. The full `test_create_write_ownership.py` passed against
+PostgreSQL 16.15 built with `BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
+
 ## Runtime architecture
 
 FOD is Rust-backed end to end:
@@ -229,6 +237,16 @@ These values describe different layers and must not be conflated:
 | FUSE max readahead | 512 KiB | readahead ceiling |
 | base persist chunk | 128 FOD blocks = 4 MiB at the 32 KiB default | normal PostgreSQL payload batching unit; byte size scales with the filesystem's persisted storage block size |
 | PostgreSQL server block | 32 KiB | `BLCKSZ` of the reference PostgreSQL Docker image |
+
+The reference image is built from the pinned PostgreSQL source in
+[`docker/postgres-blocksize/Dockerfile`](../docker/postgres-blocksize/Dockerfile)
+with `--with-blocksize=32`. The publisher
+[`scripts/publish_postgres_fod_32k.sh`](../scripts/publish_postgres_fod_32k.sh)
+verifies both compiled `pg_config --configure` and runtime `SHOW block_size`;
+the live test cluster confirmed `32768` bytes. Use this build and verify its
+actual page size when reviewing PostgreSQL index or tuple limits. The standard
+8 KiB image is only the compatibility/comparison variant. More build details:
+[`FOD_POSTGRES_32K_CONTAINER.md`](FOD_POSTGRES_32K_CONTAINER.md).
 
 Increasing a FUSE request size does **not** change the on-database FOD storage format. A 32 KiB default applies only when a new filesystem is initialized without an explicit `--block-size`; an existing filesystem continues to use its persisted `block_size`.
 

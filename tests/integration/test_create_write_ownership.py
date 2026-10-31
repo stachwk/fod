@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 import subprocess
 import tempfile
 import threading
@@ -153,6 +154,32 @@ def finish_open(
     )
 
 
+def start_operation(operation):
+    result: dict[str, object] = {"errno": None}
+
+    def worker() -> None:
+        try:
+            operation()
+        except OSError as exc:
+            result["errno"] = exc.errno
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread, result
+
+
+def finish_operation(
+    thread: threading.Thread,
+    result: dict[str, object],
+    label: str,
+) -> int | None:
+    thread.join(BARRIER_TIMEOUT_SECONDS)
+    if thread.is_alive():
+        raise AssertionError(f"{label}: operation thread did not finish")
+    error = result["errno"]
+    return int(error) if error is not None else None
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
 
@@ -294,6 +321,116 @@ def main() -> None:
             fd_b = None
             wait_for_ownership_cleanup(launcher_a, race_name)
             wait_for_ownership_cleanup(launcher_b, race_name)
+
+            # The other namespace-creation callbacks also used to resolve
+            # their destination path after commit. If that object was already
+            # removed, they must not return the replacement's attributes.
+            def replacement_race(
+                label: str,
+                race_name: str,
+                operation,
+                replace,
+                cleanup,
+            ) -> None:
+                race_path_a = mount_a_dir / race_name
+                race_path_b = mount_b_dir / race_name
+                for control_file in ("ready", "release"):
+                    (post_create_barrier_dir / control_file).unlink(missing_ok=True)
+                (post_create_barrier_dir / "target").write_text(
+                    f"/{race_name}", encoding="utf-8"
+                )
+                thread, result = start_operation(lambda: operation(race_path_a))
+                wait_barrier_ready(post_create_barrier_dir)
+                try:
+                    replace(race_path_b)
+                except OSError:
+                    for launcher in (launcher_a, launcher_b):
+                        if launcher.config is not None:
+                            print(
+                                launcher.config.log_file.read_text(
+                                    encoding="utf-8"
+                                ),
+                                end="",
+                            )
+                    raise
+                finally:
+                    release_barrier(post_create_barrier_dir)
+                error = finish_operation(thread, result, label)
+                if error != errno.EIO:
+                    raise AssertionError(
+                        f"{label}: expected EIO after original entry was removed, "
+                        f"got errno={error}"
+                    )
+                cleanup(race_path_b)
+                print(f"OK {label} replacement_not_returned errno={error}")
+
+            replacement_race(
+                "mkdir-reply-path-replacement",
+                f"mkdir-reply-replacement-{uuid.uuid4().hex}",
+                lambda path: os.mkdir(path, 0o755),
+                lambda path: (os.rmdir(path), os.mkdir(path, 0o755)),
+                lambda path: os.rmdir(path),
+            )
+            replacement_race(
+                "mknod-reply-path-replacement",
+                f"mknod-reply-replacement-{uuid.uuid4().hex}.bin",
+                lambda path: os.mknod(path, stat.S_IFREG | 0o600),
+                lambda path: (path.unlink(), path.write_bytes(b"replacement")),
+                lambda path: path.unlink(),
+            )
+            replacement_race(
+                "symlink-reply-path-replacement",
+                f"symlink-reply-replacement-{uuid.uuid4().hex}",
+                lambda path: os.symlink("original-target", path),
+                lambda path: (path.unlink(), os.symlink("replacement-target", path)),
+                lambda path: path.unlink(),
+            )
+
+            # A hardlink reply must keep the source inode even if another
+            # mount removes and replaces the new alias before FUSE replies.
+            source_name = f"link-reply-source-{uuid.uuid4().hex}.bin"
+            alias_name = f"link-reply-alias-{uuid.uuid4().hex}.bin"
+            source_path_a = mount_a_dir / source_name
+            source_path_b = mount_b_dir / source_name
+            alias_path_a = mount_a_dir / alias_name
+            alias_path_b = mount_b_dir / alias_name
+            source_path_a.write_bytes(b"source")
+            for control_file in ("ready", "release"):
+                (post_create_barrier_dir / control_file).unlink(missing_ok=True)
+            (post_create_barrier_dir / "target").write_text(
+                f"/{alias_name}", encoding="utf-8"
+            )
+            link_thread, link_result = start_operation(
+                lambda: os.link(source_path_a, alias_path_a)
+            )
+            wait_barrier_ready(post_create_barrier_dir)
+            try:
+                alias_path_b.unlink()
+                alias_path_b.write_bytes(b"replacement")
+            finally:
+                release_barrier(post_create_barrier_dir)
+            link_errno = finish_operation(
+                link_thread,
+                link_result,
+                "link reply path replacement",
+            )
+            if link_errno is not None:
+                raise AssertionError(f"link reply failed with errno={link_errno}")
+            source_inode = source_path_a.stat().st_ino
+            alias_inode = alias_path_a.stat().st_ino
+            replacement_inode = alias_path_b.stat().st_ino
+            if alias_inode != source_inode or alias_inode == replacement_inode:
+                raise AssertionError(
+                    "link reply used replacement inode: "
+                    f"source={source_inode} alias={alias_inode} "
+                    f"replacement={replacement_inode}"
+                )
+            print(
+                "OK link-reply-path-replacement "
+                f"source_inode={source_inode} replacement_inode={replacement_inode}"
+            )
+            alias_path_b.unlink()
+            source_path_a.unlink()
 
             if fd_a is not None:
                 os.close(fd_a)

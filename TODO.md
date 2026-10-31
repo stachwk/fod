@@ -26,6 +26,20 @@ Reading guide:
   libfuse3 3.18.3 i PostgreSQL 16.15; użyto usuniętej po teście bazy
   tymczasowej.
 
+- [x] **Create callback nie może pomylić obiektu z jego zastępcą ani aliasem hardlinku.**
+  `mkdir`, `mknod` i `symlink` pobierają teraz metadane odpowiedzi po ID zwróconym
+  z zatwierdzonej transakcji; `link` pobiera je po ID pliku źródłowego, zachowując
+  tożsamość hardlinku. Dwumountowy test z barierą usuwa utworzony obiekt i tworzy
+  inny pod tą samą nazwą; callbacki oryginalnych obiektów zwracają `EIO`, zamiast
+  atrybutów zastępcy. Pierwsza próba ujawniła, że parser pustą ścieżkę metadanych
+  po ID normalizował do `/` i przypisywał katalogom inode roota; root jest teraz
+  rozpoznawany jawnie. Test hardlinku wykrył też nadpisywanie odwrotnej mapy
+  inode→ścieżka przez alias; rejestracja zachowuje istniejącą ścieżkę dla
+  współdzielonego inode, a jej usunięcie wybiera pozostały alias. Pełny
+  `tests/integration/test_create_write_ownership.py` przeszedł 2026-10-31 na FOD
+  3.4.452, Linux 6.17.0-41, libfuse3 3.18.3 i PostgreSQL 16.15 z
+  `BLCKSZ=32KiB`; test używał i usunął tymczasową bazę.
+
 - [x] **Obsłużyć i zweryfikować długie ścieżki w indeksach indeksatora.**
   Źródło problemu było potwierdzone w kodzie: `WalkDir` zapisuje ścieżkę
   względną bez limitu aplikacyjnego, podczas gdy B-tree pełnego tekstu może

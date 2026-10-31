@@ -81,6 +81,15 @@ two-mount regression failed with the old path lookup and passed with the fix;
 the full create/write ownership test passed on Linux 6.17.0-41/libfuse3 3.18.3
 against a disposable PostgreSQL 16.15 database. Continue auditing remaining
 mutation preconditions.
+
+FOD 3.4.452 extends ID-bound replies to `mkdir`, `mknod`, `symlink` and `link`.
+The same mounted regression now replaces each destination after commit and
+before reply; the original create returns `EIO` if its object was deleted, and
+hardlink replies retain the source inode after an alias replacement. Fixes also
+cover root-inode parsing for ID-based metadata and reverse path selection for
+hardlinked inodes. The full test passed against PostgreSQL 16.15 with
+`BLCKSZ=32KiB` on Linux 6.17.0-41/libfuse3 3.18.3. The active primary-authority
+audit remains open for other mutation preconditions.
 Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.

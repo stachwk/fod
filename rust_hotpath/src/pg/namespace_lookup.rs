@@ -864,6 +864,14 @@ impl DbRepo {
             Some(entry_id) => entry_id,
             None => return Ok(None),
         };
+        self.fetch_entry_attrs_blob_by_id(kind, entry_id)
+    }
+
+    pub fn fetch_entry_attrs_blob_by_id(
+        &self,
+        kind: &str,
+        entry_id: u64,
+    ) -> Result<Option<Vec<u8>>, String> {
         let entry_id = CString::new(entry_id.to_string())
             .map_err(|_| "entry id contains NUL byte".to_string())?;
 
