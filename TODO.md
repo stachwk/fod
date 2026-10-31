@@ -984,6 +984,13 @@ Reading guide:
   `pg_query` tests passed against an isolated PostgreSQL 16.15 database after
   verifying the custom build flag `--with-blocksize=32` and runtime
   `SHOW block_size=32768`; the disposable database was dropped afterward.
+  FOD 3.4.486 applies exact row-count and column-count checks to the inode and
+  access-ACL reads used by transactional `chmod` and timestamp authorization.
+  Duplicate or malformed rows now abort the transaction instead of selecting
+  an arbitrary first record. All 72 `pg_query` tests passed on an isolated
+  current-schema PostgreSQL 16.15 database after checking the custom
+  `--with-blocksize=32` build and live `SHOW block_size=32768`; the disposable
+  database was dropped afterward.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

@@ -61,6 +61,10 @@ FOD 3.4.485 makes namespace create-confirmation and startup queries validate
 exact row cardinality and column shape. The focused decoder regression and all
 72 `pg_query` tests passed against an isolated PostgreSQL 16.15 database with
 verified 32 KiB pages. Continue the broader database fault-injection audit.
+FOD 3.4.486 extends strict row-shape validation to transactional chmod and
+timestamp authorization metadata. All 72 `pg_query` tests passed on an
+isolated current-schema database on the verified 32 KiB build. Continue the
+broader fault-injection audit.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

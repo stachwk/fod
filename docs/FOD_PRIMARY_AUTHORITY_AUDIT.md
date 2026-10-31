@@ -926,3 +926,10 @@ row with the expected number of columns. The decoder regression and all 72
 `pg_query` tests passed against a disposable PostgreSQL 16.15 database after
 checking `--with-blocksize=32` and live `SHOW block_size=32768`; the database
 was dropped after the run.
+FOD 3.4.486 extends exact row cardinality and shape checks to the locked inode
+and ACL lookups in transactional chmod and timestamp authorization. Duplicate
+or malformed authorization metadata now aborts the transaction instead of
+being interpreted from its first row. All 72 `pg_query` tests passed on an
+isolated current-schema database after confirming PostgreSQL 16.15's
+`--with-blocksize=32` build and live `SHOW block_size=32768`; the temporary
+database was dropped.

@@ -6,7 +6,7 @@
 
 use super::{
     exec_command_params, exec_params, fetch_optional_single_row_texts_exact,
-    parse_persisted_posix_mode, DbRepo, PGconn,
+    parse_persisted_posix_mode, validate_optional_single_row_texts, DbRepo, PGconn,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -406,10 +406,11 @@ impl DbRepo {
             let rows = tx.query_rows_text(&format!(
                 "SELECT uid, gid, {mode_column}, inode_seed FROM {table} WHERE {key}={id} FOR UPDATE"
             ))?;
-            let Some(row) = rows.first() else {
+            let Some(row) = validate_optional_single_row_texts(rows, 4, "timestamp inode lookup")?
+            else {
                 return Ok(InodeTimesOutcome::Missing);
             };
-            if row.len() != 4 || row[3] != expected_seed {
+            if row[3] != expected_seed {
                 return Ok(InodeTimesOutcome::Missing);
             }
             let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
@@ -427,15 +428,20 @@ impl DbRepo {
                         InodeTimesOutcome::Denied
                     });
                 }
-                let acl_rows = if change.use_posix_acl {
-                    tx.query_rows_text(&format!(
+                let acl_row = if change.use_posix_acl {
+                    validate_optional_single_row_texts(
+                        tx.query_rows_text(&format!(
                         "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{}' AND owner_id={id} AND name='system.posix_acl_access'",
                         acl_kind.unwrap()
-                    ))?
+                        ))?,
+                        1,
+                        "timestamp access ACL lookup",
+                    )?
                 } else {
-                    Vec::new()
+                    None
                 };
-                let has_write = if let Some(encoded) = acl_rows.first().and_then(|row| row.first()) {
+                let has_write = if let Some(row) = acl_row {
+                    let encoded = &row[0];
                     let acl = BASE64_STANDARD
                         .decode(encoded.trim())
                         .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
@@ -498,10 +504,11 @@ impl DbRepo {
             let rows = tx.query_rows_text(&format!(
                 "SELECT uid, gid, {mode_column}, inode_seed FROM {table} WHERE {key}={id} FOR UPDATE"
             ))?;
-            let Some(row) = rows.first() else {
+            let Some(row) = validate_optional_single_row_texts(rows, 4, "permission inode lookup")?
+            else {
                 return Ok(InodePermissionOutcome::Missing);
             };
-            if row.len() != 4 || row[3] != expected_seed {
+            if row[3] != expected_seed {
                 return Ok(InodePermissionOutcome::Missing);
             }
             let uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
@@ -526,10 +533,15 @@ impl DbRepo {
                 mode &= !0o6000;
             }
             if change.mode.is_some() && change.use_posix_acl && matches!(kind, "file" | "dir") {
-                let acl_rows = tx.query_rows_text(&format!(
-                    "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{kind}' AND owner_id={id} AND name='system.posix_acl_access'"
-                ))?;
-                if let Some(encoded) = acl_rows.first().and_then(|row| row.first()) {
+                let acl_row = validate_optional_single_row_texts(
+                    tx.query_rows_text(&format!(
+                        "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{kind}' AND owner_id={id} AND name='system.posix_acl_access'"
+                    ))?,
+                    1,
+                    "chmod access ACL lookup",
+                )?;
+                if let Some(row) = acl_row {
+                    let encoded = &row[0];
                     let acl = BASE64_STANDARD
                         .decode(encoded.trim())
                         .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
