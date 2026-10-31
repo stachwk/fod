@@ -927,11 +927,16 @@ Reading guide:
   valid/absent rows, NULL, extra rows, zero columns, valid multirow
   single-column results and malformed first-column results; it passed against
   the verified PostgreSQL 16.15 `BLCKSZ=32KiB` endpoint. The generic multirow
-  `fetch_rows_text()` still serializes SQL NULL as empty text; audit its
-  remaining consumers and explicit nullable-field contracts before deciding
-  whether to replace that behavior. This closes the single-row and
-  first-column decoder question, not the broader PostgreSQL fault-injection
-  work.
+  FOD 3.4.478 changes `fetch_rows_text()` to reject zero-column results and SQL
+  NULL values while preserving valid empty strings and multirow results. Its
+  consumers were audited: nullable query outputs use `COALESCE`, schema-backed
+  metadata is non-NULL, and test cleanup explicitly filters nullable
+  `data_object_id`. `postgres_row_decoders_reject_null_and_malformed_shapes`
+  covers valid multirow/empty results, empty text, NULL and zero-column results.
+  It passed against the verified PostgreSQL 16.15 build after checking its
+  Docker image, `pg_config --configure` (`--with-blocksize=32`) and live
+  `SHOW block_size=32768`. This closes the generic multirow NULL-conversion
+  question, not the broader PostgreSQL fault-injection work.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

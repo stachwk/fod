@@ -25,8 +25,10 @@ see the authority audit and `TODO.md`.
 FOD 3.4.477 hardens PostgreSQL single-row and first-column result decoding:
 missing rows are distinct from malformed shapes, NULL fields fail closed, and
 unexpected multiple rows are rejected. The focused decoder regression passed
-on the verified PostgreSQL 16.15 `BLCKSZ=32KiB` runtime. Continue the broader
-database fault-injection audit, including NULL handling in multirow results.
+on the verified PostgreSQL 16.15 `BLCKSZ=32KiB` runtime. FOD 3.4.478 extends
+strict NULL and shape validation to general multirow results; its focused
+regression passed after checking the image, custom `pg_config` build flags and
+live 32768-byte page size. Continue the broader database fault-injection audit.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

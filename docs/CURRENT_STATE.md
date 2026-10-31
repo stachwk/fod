@@ -25,6 +25,13 @@ or malformed result rows rather than silently producing empty values; optional
 scalar reads preserve the distinct zero-row case. Focused database regression
 coverage is in `scalar_text_decoders_distinguish_absent_null_and_malformed_results`.
 
+FOD 3.4.478 extends strict PostgreSQL result decoding to multirow text results:
+NULL fields and zero-column results now fail instead of appearing as empty
+values. Valid empty strings and zero-row queries with a defined result shape
+remain supported. The caller audit confirmed nullable outputs use `COALESCE`;
+the focused regression passed against the custom PostgreSQL 16.15 build with
+`--with-blocksize=32` and live `SHOW block_size=32768`.
+
 FOD 3.4.464 closes cached libpq connections when a repository's connection
 pools are dropped and reports a missing data-object reference count through the
 owning operation instead of losing that context in the scalar decoder. The

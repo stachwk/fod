@@ -881,5 +881,9 @@ values; callers use it for directory entry names and orphan-purge file IDs.
 `optional_row_decoder_rejects_null_and_multiple_rows` checks valid and absent
 results plus NULL, duplicate-row, zero-column and invalid first-column shapes;
 it passed against PostgreSQL 16.15 with `--with-blocksize=32` and live
-`SHOW block_size=32768`. The general multirow `fetch_rows_text()` decoder still
-maps NULL fields to empty strings and needs a separate caller-by-caller audit.
+`SHOW block_size=32768`. FOD 3.4.478 also makes the general multirow
+`fetch_rows_text()` decoder reject NULL fields and zero-column results while
+preserving valid empty strings. Its nullable consumers use explicit
+`COALESCE`; schema-backed metadata is non-NULL, and test cleanup filters the
+nullable data-object ID. `postgres_row_decoders_reject_null_and_malformed_shapes`
+passed on the same verified 32 KiB PostgreSQL build.

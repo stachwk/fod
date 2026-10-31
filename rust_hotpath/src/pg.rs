@@ -2955,23 +2955,37 @@ unsafe fn fetch_rows_text(res: *mut PGresult) -> Result<Vec<Vec<String>>, String
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows < 1 || cols < 1 {
+            if cols < 1 {
+                Err("invalid PostgreSQL row result: expected at least 1 column, got 0".to_string())
+            } else if rows == 0 {
                 Ok(Vec::new())
             } else {
-                let mut values = Vec::with_capacity(rows as usize);
-                for row in 0..rows {
-                    let mut current = Vec::with_capacity(cols as usize);
-                    for col in 0..cols {
-                        let value_ptr = PQgetvalue(res, row, col);
-                        if value_ptr.is_null() {
-                            current.push(String::new());
-                        } else {
+                (|| {
+                    let mut values = Vec::with_capacity(rows as usize);
+                    for row in 0..rows {
+                        let mut current = Vec::with_capacity(cols as usize);
+                        for col in 0..cols {
+                            if PQgetisnull(res, row, col) != 0 {
+                                return Err(format!(
+                                    "invalid PostgreSQL row result: NULL at row {}, column {}",
+                                    row + 1,
+                                    col + 1
+                                ));
+                            }
+                            let value_ptr = PQgetvalue(res, row, col);
+                            if value_ptr.is_null() {
+                                return Err(format!(
+                                    "invalid PostgreSQL row result: null value pointer at row {}, column {}",
+                                    row + 1,
+                                    col + 1
+                                ));
+                            }
                             current.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
                         }
+                        values.push(current);
                     }
-                    values.push(current);
-                }
-                Ok(values)
+                    Ok(values)
+                })()
             }
         }
         _ => Err(result_error(res)),
@@ -15707,7 +15721,7 @@ mod tests {
     }
 
     #[test]
-    fn optional_row_decoder_rejects_null_and_multiple_rows() -> Result<(), String> {
+    fn postgres_row_decoders_reject_null_and_malformed_shapes() -> Result<(), String> {
         let conninfo = CString::new(conninfo())
             .map_err(|_| "test PostgreSQL connection string contains NUL".to_string())?;
         let conn = unsafe { PQconnectdb(conninfo.as_ptr()) };
@@ -15737,6 +15751,15 @@ mod tests {
                     return Err(conn_error(conn));
                 }
                 fetch_first_column_texts(res)
+            };
+            let query_rows = |sql: &str| -> Result<Vec<Vec<String>>, String> {
+                let sql =
+                    CString::new(sql).map_err(|_| "test rows SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_rows_text(res)
             };
 
             let result = (|| {
@@ -15773,6 +15796,28 @@ mod tests {
                         return Err(format!(
                             "first-column decoder accepted malformed result: {sql}"
                         ));
+                    }
+                }
+                if query_rows(
+                    "SELECT value::text, label::text FROM (VALUES (1, 'one'), (2, 'two')) AS rows(value, label)",
+                )? != vec![
+                    vec!["1".to_string(), "one".to_string()],
+                    vec!["2".to_string(), "two".to_string()],
+                ] {
+                    return Err("multirow decoder changed valid rows".to_string());
+                }
+                if query_rows("SELECT ''::text WHERE FALSE")? != Vec::<Vec<String>>::new() {
+                    return Err("multirow decoder changed valid empty result".to_string());
+                }
+                if query_rows("SELECT ''::text")? != vec![vec![String::new()]] {
+                    return Err("multirow decoder changed valid empty text".to_string());
+                }
+                for sql in [
+                    "SELECT NULL::text",
+                    "SELECT FROM pg_catalog.pg_class WHERE FALSE",
+                ] {
+                    if query_rows(sql).is_ok() {
+                        return Err(format!("multirow decoder accepted malformed result: {sql}"));
                     }
                 }
                 Ok(())
@@ -15898,7 +15943,7 @@ mod tests {
         let names_sql = quoted_list(names);
         let ids = repo
             .query_rows_text(&format!(
-                "SELECT data_object_id::text FROM files WHERE name IN ({names_sql})"
+                "SELECT data_object_id::text FROM files WHERE data_object_id IS NOT NULL AND name IN ({names_sql})"
             ))
             .unwrap_or_default()
             .into_iter()
