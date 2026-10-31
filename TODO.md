@@ -23,12 +23,12 @@ Reading guide:
   używa stratnej konwersji komponentów. Test jednostkowy regresji dodano w
   `rust_indexer/src/scan.rs`; nie został jeszcze uruchomiony.
 
-- [ ] **Dodać regresję dla niepoprawnego UTF-8 w polach NUL-delimited PostgreSQL.**
+- [ ] **Uruchomić regresje ścisłego UTF-8 w polach PostgreSQL i mountpointach.**
   `rust_fuse/src/fs.rs` odrzuca teraz uszkodzone bajty w spakowanych polach
   atrybutów i snapshotach `readdir` jako `EIO`; wcześniej `from_utf8_lossy()`
-  mógł zmienić je w tekst z U+FFFD. Dodać i uruchomić test dekodera, który
-  potwierdzi poprawne rozdzielanie pól, pusty wynik i odmowę dla niepoprawnego
-  UTF-8. Dodać także kontrolę, że nie-UTF-8 mountpoint kończy start przed
+  mógł zmienić je w tekst z U+FFFD. Testy jednostkowe dekodera oraz walidatora
+  mountpointu sprawdzają zachowanie dla poprawnych i błędnych bajtów; nie zostały
+  jeszcze uruchomione. Nie-UTF-8 mountpoint musi zostać odrzucony przed
   rejestracją sesji. Nie używać stratnej konwersji do naprawiania danych z bazy.
 
 - [ ] **Bezpiecznie odzyskiwać import pozostawiony w `materialize_running`.**

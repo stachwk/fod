@@ -2713,6 +2713,11 @@ impl FodFuse {
         value.to_str().ok_or(EILSEQ)
     }
 
+    fn mountpoint_as_utf8(path: &Path) -> Result<&str, String> {
+        path.to_str()
+            .ok_or_else(|| "FOD mountpoint is not valid UTF-8".to_string())
+    }
+
     fn copy_dedupe_enabled_for_len(&self, len: u64) -> bool {
         let live = self.reloadable_runtime();
         if !live.copy_dedupe_enabled || len == 0 {
@@ -5961,10 +5966,7 @@ impl FodFuse {
             return Ok(());
         };
         let host_name = client_session_hostname(std::env::var("HOSTNAME").ok(), current_hostname());
-        let mountpoint = mountpoint
-            .to_str()
-            .ok_or_else(|| "FOD mountpoint is not valid UTF-8".to_string())?
-            .to_owned();
+        let mountpoint = Self::mountpoint_as_utf8(mountpoint)?.to_owned();
         let pid = u64::from(std::process::id());
         let session_id = repo.register_client_session(
             &host_name,
@@ -11726,6 +11728,7 @@ mod tests {
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::os::unix::ffi::OsStrExt;
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime};
@@ -11736,6 +11739,31 @@ mod tests {
         assert_eq!(parse_file_mode("0o4755"), Ok(0o4755));
         assert_eq!(parse_file_mode("10000"), Err(crate::errno::EIO));
         assert_eq!(parse_file_mode("broken"), Err(crate::errno::EIO));
+    }
+
+    #[test]
+    fn nul_field_decoder_preserves_utf8_and_rejects_malformed_bytes() {
+        assert_eq!(
+            FodFuse::decode_nul_fields("alpha\0replacement-�".as_bytes()),
+            Ok(vec!["alpha".to_string(), "replacement-�".to_string()])
+        );
+        assert_eq!(FodFuse::decode_nul_fields(&[]), Ok(Vec::new()));
+        assert_eq!(
+            FodFuse::decode_nul_fields(b"valid\0bad-\xff"),
+            Err(crate::errno::EIO)
+        );
+    }
+
+    #[test]
+    fn mountpoint_text_rejects_non_utf8() {
+        let valid = std::path::Path::new("/mnt/fod");
+        assert_eq!(FodFuse::mountpoint_as_utf8(valid), Ok("/mnt/fod"));
+
+        let invalid = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/mnt/fod-\xff"));
+        assert_eq!(
+            FodFuse::mountpoint_as_utf8(invalid),
+            Err("FOD mountpoint is not valid UTF-8".to_string())
+        );
     }
 
     #[test]

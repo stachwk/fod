@@ -172,7 +172,9 @@ dekodowane ściśle; uszkodzone UTF-8 kończy operację `EIO`, zamiast aliasowa�
 wartość przez U+FFFD. `test_path_trailing_slash.py` sprawdza `EILSEQ` dla
 utworzenia pliku oraz obu stron `rename()` i brak aliasowania poprawnej nazwy
 z U+FFFD. Nie-UTF-8 mountpoint jest odrzucany przed rejestracją sesji zamiast
-zapisywania jego stratnej reprezentacji w PostgreSQL.
+zapisywania jego stratnej reprezentacji w PostgreSQL. Testy jednostkowe
+dekodera i walidacji mountpointu są dodane; ich uruchomienie pozostaje otwarte
+w [`TODO.md`](../TODO.md).
 
 Pełna macierz end-to-end dla wielu wersji Linux/libfuse i dystrybucji pozostaje
 poza pokryciem. Host systemowy raportuje libfuse 3.17.4, czyli poniżej
