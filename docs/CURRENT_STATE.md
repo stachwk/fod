@@ -134,8 +134,11 @@ PostgreSQL remains the durable authority.
 
 The mounted timestamp regression checks invalid nanoseconds in both `utimensat`
 fields and verifies that each `UTIME_NOW`/`UTIME_OMIT` order changes only the
-requested timestamp. The broader metadata-and-timestamps POSIX audit remains
-open.
+requested timestamp. `test_symlink.sh` also submits `.123456789` through
+`utimens()` and verifies that `stat()` reports `.123457000`, documenting the
+PostgreSQL `TIMESTAMP` microsecond precision used for persisted filesystem
+times. The test passed on PostgreSQL 16.15 `BLCKSZ=32KiB`, Linux 6.17.0-41 and
+libfuse3 3.18.3. The broader metadata-and-timestamps POSIX audit remains open.
 
 Writable mounts use a zero FUSE attribute-cache TTL even if
 `FOD_ATTR_TIMEOUT_SECONDS` requests a positive value. Linux computes an

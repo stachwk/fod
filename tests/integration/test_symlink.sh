@@ -48,12 +48,18 @@ assert link_stat.st_ino != target_stat.st_ino
 link_mtime_before = link_stat.st_mtime_ns
 os.chmod(link, 0o640)
 assert stat.S_IMODE(os.stat(target).st_mode) == 0o640
-target_atime_ns = (time.time_ns() - 21_000_000_000) // 1000 * 1000
-target_mtime_ns = (time.time_ns() - 20_000_000_000) // 1000 * 1000
+target_atime_sec = (time.time_ns() - 21_000_000_000) // 1_000_000_000
+target_mtime_sec = (time.time_ns() - 20_000_000_000) // 1_000_000_000
+# PostgreSQL TIMESTAMP stores microseconds. A nanosecond value that is not
+# aligned to that resolution must be rounded by PostgreSQL on persistence.
+target_atime_ns = target_atime_sec * 1_000_000_000 + 123_456_789
+target_mtime_ns = target_mtime_sec * 1_000_000_000 + 123_456_789
+expected_atime_ns = target_atime_sec * 1_000_000_000 + 123_457_000
+expected_mtime_ns = target_mtime_sec * 1_000_000_000 + 123_457_000
 os.utime(link, ns=(target_atime_ns, target_mtime_ns))
 updated_target_stat = os.stat(target)
-assert updated_target_stat.st_atime_ns == target_atime_ns, (updated_target_stat.st_atime_ns, target_atime_ns)
-assert updated_target_stat.st_mtime_ns == target_mtime_ns, (updated_target_stat.st_mtime_ns, target_mtime_ns)
+assert updated_target_stat.st_atime_ns == expected_atime_ns, (updated_target_stat.st_atime_ns, expected_atime_ns)
+assert updated_target_stat.st_mtime_ns == expected_mtime_ns, (updated_target_stat.st_mtime_ns, expected_mtime_ns)
 assert os.lstat(link).st_mtime_ns == link_mtime_before
 
 fd = os.open(link, os.O_WRONLY | os.O_TRUNC)

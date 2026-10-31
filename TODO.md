@@ -14,6 +14,17 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Udokumentować precyzję znaczników czasu przechowywanych przez PostgreSQL.**
+  `TIMESTAMP` w PostgreSQL zapisuje ułamki sekund z rozdzielczością 1 µs.
+  Test symlinku podaje `tv_nsec=123456789` i sprawdza po zapisie oraz `stat()`
+  wartość `123457000`; wejście nanosekundowe jest zaokrąglane do najbliższej
+  mikrosekundy. `test_symlink.sh` przeszedł na FOD 3.4.455, PostgreSQL 16.15
+  z `BLCKSZ=32KiB`, Linux 6.17.0-41 i libfuse3 3.18.3. Pierwsze uruchomienie
+  `make test-symlink` zatrzymało się na współdzielonej bazie ze starszym stanem
+  schematu; test powtórzono na izolowanej bazie. Runtime wymagał jawnego
+  `LD_LIBRARY_PATH`, aby załadować libfuse3 3.18.3 zamiast systemowej 3.17.0.
+  Pełny obszar P06 pozostaje otwarty dla pozostałych pól `stat` i błędów.
+
 - [x] **Walidacja inode rodzica i wybór jego ID korzystają z tego samego odczytu PostgreSQL.**
   `parent_entry_id_for_inode()` pobierało atrybuty i potwierdzało inode, po
   czym osobnym `resolve_path()` odczytywało ID katalogu. Podmiana katalogu
