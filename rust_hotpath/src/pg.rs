@@ -2864,6 +2864,10 @@ unsafe fn fetch_single_text(res: *mut PGresult) -> Result<String, String> {
 
 unsafe fn fetch_single_positive_id(res: *mut PGresult, description: &str) -> Result<u64, String> {
     let value = fetch_single_text(res)?;
+    parse_positive_u64_text(&value, description)
+}
+
+fn parse_positive_u64_text(value: &str, description: &str) -> Result<u64, String> {
     let id = value
         .trim()
         .parse::<u64>()
@@ -6143,14 +6147,13 @@ impl DbRepo {
         else {
             return Ok(None);
         };
-        let hardlink_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
-        let id_file = row[1].trim().parse::<u64>().ok();
-        let matches = hardlink_id.is_some()
-            && id_file == Some(source_file_id)
+        let hardlink_id = parse_positive_u64_text(&row[0], "created hardlink lookup ID")?;
+        let id_file = parse_positive_u64_text(&row[1], "created hardlink file ID")?;
+        let matches = id_file == source_file_id
             && row[2].trim() == uid.to_string()
             && row[3].trim() == gid.to_string();
         if matches {
-            Ok(hardlink_id)
+            Ok(Some(hardlink_id))
         } else {
             Ok(None)
         }
@@ -6178,14 +6181,13 @@ impl DbRepo {
         else {
             return Ok(None);
         };
-        let symlink_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
-        let matches = symlink_id.is_some()
-            && row[1].trim() == target
+        let symlink_id = parse_positive_u64_text(&row[0], "created symlink lookup ID")?;
+        let matches = row[1].trim() == target
             && row[2].trim() == uid.to_string()
             && row[3].trim() == gid.to_string()
             && row[4].trim() == inode_seed;
         if matches {
-            Ok(symlink_id)
+            Ok(Some(symlink_id))
         } else {
             Ok(None)
         }
@@ -6211,7 +6213,10 @@ impl DbRepo {
         else {
             return Ok(None);
         };
-        Ok(row[0].trim().parse::<u64>().ok().filter(|id| *id > 0))
+        Ok(Some(parse_positive_u64_text(
+            &row[0],
+            "created symlink hardlink lookup ID",
+        )?))
     }
 
     fn confirm_created_directory(
@@ -6236,14 +6241,13 @@ impl DbRepo {
         else {
             return Ok(None);
         };
-        let directory_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
-        let matches = directory_id.is_some()
-            && row[1].trim() == mode
+        let directory_id = parse_positive_u64_text(&row[0], "created directory lookup ID")?;
+        let matches = row[1].trim() == mode
             && row[2].trim() == uid.to_string()
             && row[3].trim() == gid.to_string()
             && row[4].trim() == inode_seed;
         if matches {
-            Ok(directory_id)
+            Ok(Some(directory_id))
         } else {
             Ok(None)
         }
@@ -6586,15 +6590,14 @@ impl DbRepo {
         let Some(row) = validate_optional_single_row_texts(rows, 6, "created file lookup")? else {
             return Ok(None);
         };
-        let file_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
-        let matches = file_id.is_some()
-            && row[1].trim() == "0"
+        let file_id = parse_positive_u64_text(&row[0], "created file lookup ID")?;
+        let matches = row[1].trim() == "0"
             && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
             && Self::created_inode_seed_matches(row[5].trim(), inode_seed);
         if matches {
-            Ok(file_id)
+            Ok(Some(file_id))
         } else {
             Ok(None)
         }
@@ -6626,9 +6629,8 @@ impl DbRepo {
         else {
             return Ok(None);
         };
-        let file_id = row[0].trim().parse::<u64>().ok().filter(|id| *id > 0);
-        let matches = file_id.is_some()
-            && row[1].trim() == "0"
+        let file_id = parse_positive_u64_text(&row[0], "created special file lookup ID")?;
+        let matches = row[1].trim() == "0"
             && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
@@ -6637,7 +6639,7 @@ impl DbRepo {
             && row[7].trim() == rdev_major.to_string()
             && row[8].trim() == rdev_minor.to_string();
         if matches {
-            Ok(file_id)
+            Ok(Some(file_id))
         } else {
             Ok(None)
         }
@@ -15571,6 +15573,15 @@ mod tests {
     use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn positive_postgres_id_decoder_rejects_invalid_values() {
+        assert_eq!(parse_positive_u64_text(" 42 ", "test ID"), Ok(42));
+        assert!(parse_positive_u64_text("", "test ID").is_err());
+        assert!(parse_positive_u64_text("not-an-id", "test ID").is_err());
+        assert!(parse_positive_u64_text("0", "test ID").is_err());
+        assert!(parse_positive_u64_text("-1", "test ID").is_err());
+    }
 
     #[test]
     fn rename_namespace_decoder_rejects_malformed_rows() {

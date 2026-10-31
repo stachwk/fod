@@ -2396,3 +2396,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   `/opt/postgresql-custom/bin/pg_config`; the system `pg_config` is Ubuntu
   PostgreSQL 17.10 without `--with-blocksize=32`, and no live server
   `SHOW block_size` value was verified.
+
+## FOD 3.4.491 — reject malformed IDs in create confirmation
+
+- [x] Make the six post-unique-violation namespace confirmation paths report
+  malformed or non-positive object IDs as database-result errors rather than
+  silently converting them to “not found”. Valid but nonmatching metadata
+  still fails confirmation and retains the original unique-violation result.
+  A pure positive-ID decoder regression covers valid, empty, malformed, zero
+  and negative values. PostgreSQL integration remains pending because the
+  configured database has schema 31 (the client requires 38) and this host
+  lacks the FOD 32 KiB PostgreSQL binaries.

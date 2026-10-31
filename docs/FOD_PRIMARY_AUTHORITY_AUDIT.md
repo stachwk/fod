@@ -963,3 +963,10 @@ coverage for this change. The host does not have
 PostgreSQL 17.10 and does not report `--with-blocksize=32`. No live
 `SHOW block_size` check was made, so this host's stock build is not evidence
 for the FOD 32 KiB target.
+FOD 3.4.491 makes the post-unique-violation `create` confirmation queries
+reject malformed or non-positive PostgreSQL IDs instead of treating them as
+an absent/mismatched object. This covers files, special files, directories,
+symlinks and both hardlink forms; a valid row whose metadata differs still
+returns “not confirmed” and preserves the original uniqueness error. The pure
+positive-ID decoder test passes. PostgreSQL integration remains unverified in
+this environment for the schema and 32 KiB build reasons recorded above.
