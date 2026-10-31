@@ -23,10 +23,12 @@ passed on FOD 3.4.374 in `release-lto` against a fresh disposable PostgreSQL
 
 In the FOD `open()` callback, a genuine ACL denial maps to `EACCES`, a failed
 PostgreSQL ACL read maps to `EIO`, and malformed stored ACL data preserves
-`EINVAL`. The focused unit regression
-`open_acl_check_preserves_backend_errors_and_maps_denial_to_eacces` checks this
-callback mapping; it does not substitute for a mounted PostgreSQL fault-injection
-case.
+`EINVAL`. The unit regression
+`open_acl_check_preserves_backend_errors_and_maps_denial_to_eacces` checks all
+three mappings. `test_acl_mount_option.py` corrupts only a file's stored ACL,
+then confirms mounted `open()` returns `EINVAL` and the callback log records
+the ACL evaluation error. It passed on FOD 3.4.426/Linux 6.17.0-41-generic/
+libfuse3 3.18.2 against a disposable PostgreSQL 16.15 database on 2026-10-31.
 
 | Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |

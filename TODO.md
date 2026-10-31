@@ -742,8 +742,12 @@ Reading guide:
   `EIO` and malformed-ACL `EINVAL`, while a genuine ACL denial remains
   `EACCES`. The focused unit regression
   `open_acl_check_preserves_backend_errors_and_maps_denial_to_eacces` covers
-  all outcomes. Broader PostgreSQL fault-injection and malformed-row regressions
-  remain pending.
+  all outcomes. `test_acl_mount_option.py` also corrupts only the target file's
+  stored access ACL in PostgreSQL, then verifies `open()` returns `EINVAL` and
+  the FOD callback log reports `acl_check` with that errno. The mounted test
+  passed on FOD 3.4.426, Linux 6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL
+  16.15 on 2026-10-31; its disposable database was dropped. Broader PostgreSQL
+  fault-injection and malformed-row regressions remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values. A backend regression now seeds an

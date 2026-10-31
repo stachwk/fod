@@ -7,12 +7,14 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.425. FOD 3.4.415 raised the enforced Linux
+Reviewed source baseline: FOD 3.4.426. FOD 3.4.415 raised the enforced Linux
 minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
 mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
 parsing reject malformed numeric fields while retaining distribution suffixes
-after the final numeric component. It also preserves ACL evaluation errors from
-`open()` instead of mapping backend failures to permission denials.
+after the final numeric component. FOD 3.4.425 preserves ACL evaluation errors
+from `open()` instead of mapping backend failures to permission denials; FOD
+3.4.426 adds a mounted regression verifying malformed stored ACL data returns
+`EINVAL` from the callback.
 The preceding release implements and verifies Linux FUSE killpriv handling for
 write, truncate, `O_TRUNC` and ACL updates; these changes do not close a broader
 POSIX matrix area.

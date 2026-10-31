@@ -58,8 +58,9 @@ the eight other `mount_smoke` tests matching `concurrent_` passed in
 The permissions regression invokes libc `opendir()` as `nobody` on a mode-000
 directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
 The FUSE `open()` callback keeps ACL denial (`EACCES`) distinct from failed
-ACL metadata reads (`EIO`) and malformed stored ACL data (`EINVAL`); a focused
-unit regression covers this mapping.
+ACL metadata reads (`EIO`) and malformed stored ACL data (`EINVAL`). A unit
+regression covers the mapping, and `test_acl_mount_option.py` confirms mounted
+`EINVAL` plus the callback log after corrupting only the file's stored ACL.
 
 Logical-task admission has multithreaded unit coverage for FIFO order, capacity
 limits, queue progress as tasks finish, and balanced completion/failure metrics.

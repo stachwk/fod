@@ -494,6 +494,60 @@ def assert_capability_enabled(log_text: str, capability: str) -> None:
         assert capability in value, compatibility_line
 
 
+def assert_open_preserves_malformed_acl_errno(
+    path: Path, acl_value: bytes, launcher: FODMount, log_path: Path
+) -> None:
+    connection = psycopg2.connect(
+        host=os.environ.get("FOD_PG_HOST") or os.environ.get("POSTGRES_HOST") or "127.0.0.1",
+        port=int(os.environ.get("FOD_PG_PORT") or os.environ.get("POSTGRES_PORT") or "5432"),
+        dbname=launcher.postgres_db,
+        user=launcher.postgres_user,
+        password=launcher.postgres_password,
+    )
+    connection.autocommit = True
+    malformed_acl = b"\x03\x00\x00\x00"
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE fod.xattrs AS x SET value = %s "
+                "FROM fod.files AS f "
+                "WHERE x.owner_kind = 'file' AND x.owner_id = f.id_file "
+                "AND f.name = %s AND NOT f.unlinked "
+                "AND x.name = 'system.posix_acl_access'",
+                (malformed_acl, path.name),
+            )
+            assert cursor.rowcount == 1, (
+                f"expected one ACL row for {path.name}, got {cursor.rowcount}"
+            )
+
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError as error:
+            assert error.errno == errno.EINVAL, (
+                f"open returned errno={error.errno}, expected {errno.EINVAL}"
+            )
+        else:
+            os.close(fd)
+            raise AssertionError("open accepted a malformed stored access ACL")
+
+        callback_log = log_path.read_text(encoding="utf-8")
+        assert f"errno={errno.EINVAL}" in callback_log and "acl_check" in callback_log, (
+            "open did not report the ACL evaluation error from the FOD callback"
+        )
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE fod.xattrs AS x SET value = %s "
+                "FROM fod.files AS f "
+                "WHERE x.owner_kind = 'file' AND x.owner_id = f.id_file "
+                "AND f.name = %s AND NOT f.unlinked "
+                "AND x.name = 'system.posix_acl_access'",
+                (acl_value, path.name),
+            )
+            assert cursor.rowcount == 1, f"failed to restore ACL for {path.name}"
+        connection.close()
+
+
 def main() -> None:
     launcher = FODMount(str(ROOT))
     launcher.init_schema()
@@ -562,6 +616,9 @@ def main() -> None:
                 assert os.access(file_path, os.R_OK)
                 assert os.access(file_path, os.W_OK)
                 assert not os.access(file_path, os.X_OK)
+                assert_open_preserves_malformed_acl_errno(
+                    file_path, allow_acl, launcher, log_path
+                )
 
                 nobody = pwd.getpwnam("nobody")
                 nobody_group = grp.getgrgid(nobody.pw_gid)
@@ -671,6 +728,7 @@ def main() -> None:
 
                 print(
                     "OK acl-mount-option utimens_invalid_nsec=EINVAL "
+                    "acl_open_malformed_acl_errno=EINVAL "
                     "acl_denied_truncate_errno=EACCES "
                     "parent_namespace_create_unlink_rmdir_rename=EACCES"
                 )
