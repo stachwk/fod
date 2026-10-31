@@ -186,7 +186,7 @@ handled by Linux VFS or a library fallback without invoking an FOD callback.
 
 ## PostgreSQL storage
 
-- Current schema version: 33 (the migration manifest in
+- Current schema version: 34 (the migration manifest in
   `rust_mkfs/src/main.rs` is authoritative). Schema versions 20 and 21
   introduced the legacy extent conversion and removal described below.
 - Fresh installs use `migrations/base_schema.sql`; numbered files preserve the
@@ -252,6 +252,6 @@ handled by Linux VFS or a library fallback without invoking an FOD callback.
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; `libfod.so` is command-surface only; no supported hotpath C ABI |
-| Database schema | version 33; authoritative manifest in `rust_mkfs/src/main.rs` |
+| Database schema | version 34; authoritative manifest in `rust_mkfs/src/main.rs` |
 | Capacity | canonical DB quota, advisory-lock admission, expiring reservations |
 | Layout | canonical block payload; legacy extents only before migration 20 |

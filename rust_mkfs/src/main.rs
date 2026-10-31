@@ -28,10 +28,10 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 33;
+const SCHEMA_VERSION: u64 = 34;
 const _: () = assert!(SCHEMA_VERSION as u32 == FOD_REQUIRED_SCHEMA_VERSION);
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 33] = [
+const MIGRATION_FILES: [&str; 34] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -65,9 +65,10 @@ const MIGRATION_FILES: [&str; 33] = [
     "0031_minimum_client_version.sql",
     "0032_schema_upgrade_state.sql",
     "0033_byte_length_name_limits.sql",
+    "0034_align_numeric_column_ranges.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 33] = [
+const MIGRATION_DESCRIPTIONS: [&str; 34] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -101,6 +102,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 33] = [
     "Persist the minimum compatible FOD client release",
     "Gate FOD mounts while schema migrations are incomplete",
     "Enforce Linux byte limits for filesystem and xattr names",
+    "Align SQL numeric columns with Linux and Rust value ranges",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -304,6 +306,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0033_byte_length_name_limits.sql"
         )),
+        34 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0034_align_numeric_column_ranges.sql"
+        )),
         _ => "",
     }
 }
@@ -343,6 +349,7 @@ fn migration_description(version: u64) -> &'static str {
         31 => MIGRATION_DESCRIPTIONS[30],
         32 => MIGRATION_DESCRIPTIONS[31],
         33 => MIGRATION_DESCRIPTIONS[32],
+        34 => MIGRATION_DESCRIPTIONS[33],
         _ => "Migration",
     }
 }
@@ -382,6 +389,7 @@ fn migration_filename(version: u64) -> &'static str {
         31 => MIGRATION_FILES[30],
         32 => MIGRATION_FILES[31],
         33 => MIGRATION_FILES[32],
+        34 => MIGRATION_FILES[33],
         _ => "unknown.sql",
     }
 }
@@ -557,6 +565,74 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     FROM pg_constraint c
                     WHERE c.conrelid = to_regclass(format('fod.%I', table_name))
                       AND c.conname = constraint_name
+                      AND c.contype = 'c'
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM (VALUES
+                    ('directories', 'uid'), ('directories', 'gid'),
+                    ('files', 'uid'), ('files', 'gid'), ('files', 'size'),
+                    ('hardlinks', 'uid'), ('hardlinks', 'gid'),
+                    ('symlinks', 'uid'), ('symlinks', 'gid'),
+                    ('special_files', 'rdev_major'), ('special_files', 'rdev_minor'),
+                    ('journal', 'id_user'),
+                    ('data_objects', 'file_size'), ('data_objects', 'reference_count'),
+                    ('data_blocks', '_order'), ('copy_block_crc', '_order'),
+                    ('index_duplicate_sets', 'file_count'),
+                    ('index_import_plans', 'scanned_file_count'),
+                    ('index_import_plans', 'candidate_group_count'),
+                    ('index_import_plans', 'confirmed_group_count'),
+                    ('index_import_plans', 'unique_payload_count')
+                ) AS required_bigint_columns(table_name, column_name)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns c
+                    WHERE c.table_schema = 'fod'
+                      AND c.table_name = required_bigint_columns.table_name
+                      AND c.column_name = required_bigint_columns.column_name
+                      AND c.data_type = 'bigint'
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM (VALUES
+                    ('directories', 'directories_uid_u32_check'),
+                    ('directories', 'directories_gid_u32_check'),
+                    ('files', 'files_uid_u32_check'),
+                    ('files', 'files_gid_u32_check'),
+                    ('files', 'files_size_nonnegative_check'),
+                    ('hardlinks', 'hardlinks_uid_u32_check'),
+                    ('hardlinks', 'hardlinks_gid_u32_check'),
+                    ('symlinks', 'symlinks_uid_u32_check'),
+                    ('symlinks', 'symlinks_gid_u32_check'),
+                    ('special_files', 'special_files_rdev_major_u32_check'),
+                    ('special_files', 'special_files_rdev_minor_u32_check'),
+                    ('journal', 'journal_user_u32_check'),
+                    ('data_objects', 'data_objects_file_size_nonnegative_check'),
+                    ('data_objects', 'data_objects_reference_count_nonnegative_check'),
+                    ('data_blocks', 'data_blocks_order_nonnegative_check'),
+                    ('copy_block_crc', 'copy_block_crc_order_nonnegative_check'),
+                    ('index_files', 'index_files_size_nonnegative_check'),
+                    ('index_file_hashes', 'index_file_hashes_observed_size_nonnegative_check'),
+                    ('index_duplicate_sets', 'index_duplicate_sets_file_size_nonnegative_check'),
+                    ('index_duplicate_sets', 'index_duplicate_sets_file_count_nonnegative_check'),
+                    ('index_duplicate_sets', 'index_duplicate_sets_total_bytes_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_scanned_files_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_candidate_groups_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_confirmed_groups_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_unique_payloads_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_source_bytes_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_estimated_bytes_nonnegative_check'),
+                    ('index_import_plans', 'index_import_plans_saved_bytes_nonnegative_check'),
+                    ('index_import_plan_entries', 'index_import_plan_entries_size_nonnegative_check'),
+                    ('index_catalog_snapshots', 'index_catalog_snapshots_file_count_nonnegative_check'),
+                    ('index_catalog_snapshots', 'index_catalog_snapshots_total_bytes_nonnegative_check'),
+                    ('index_catalog_snapshot_files', 'index_catalog_snapshot_files_size_nonnegative_check')
+                ) AS required_checks(table_name, constraint_name)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM pg_constraint c
+                    WHERE c.conrelid = to_regclass(format('fod.%I', required_checks.table_name))
+                      AND c.conname = required_checks.constraint_name
                       AND c.contype = 'c'
                 )
             )

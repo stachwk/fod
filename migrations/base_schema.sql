@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS directories (
     name VARCHAR(255) NOT NULL
         CONSTRAINT directories_name_octet_length_check CHECK (octet_length(name) <= 255),
     mode VARCHAR(6) NOT NULL,
-    uid INTEGER NOT NULL,
-    gid INTEGER NOT NULL,
+    uid BIGINT NOT NULL CONSTRAINT directories_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
+    gid BIGINT NOT NULL CONSTRAINT directories_gid_u32_check CHECK (gid BETWEEN 0 AND 4294967295),
     inode_seed TEXT NOT NULL,
     modification_date TIMESTAMP NOT NULL,
     access_date TIMESTAMP NOT NULL,
@@ -19,9 +19,11 @@ CREATE TABLE IF NOT EXISTS directories (
 
 CREATE TABLE IF NOT EXISTS data_objects (
     id_data_object SERIAL PRIMARY KEY,
-    file_size BIGINT NOT NULL DEFAULT 0,
+    file_size BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT data_objects_file_size_nonnegative_check CHECK (file_size >= 0),
     content_hash BYTEA,
-    reference_count INTEGER NOT NULL DEFAULT 1,
+    reference_count BIGINT NOT NULL DEFAULT 1
+        CONSTRAINT data_objects_reference_count_nonnegative_check CHECK (reference_count >= 0),
     creation_date TIMESTAMP NOT NULL DEFAULT NOW(),
     modification_date TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -33,10 +35,10 @@ CREATE TABLE IF NOT EXISTS files (
     id_directory INTEGER REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT files_name_octet_length_check CHECK (octet_length(name) <= 255),
-    size BIGINT NOT NULL,
+    size BIGINT NOT NULL CONSTRAINT files_size_nonnegative_check CHECK (size >= 0),
     mode VARCHAR(6) NOT NULL,
-    uid INTEGER NOT NULL,
-    gid INTEGER NOT NULL,
+    uid BIGINT NOT NULL CONSTRAINT files_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
+    gid BIGINT NOT NULL CONSTRAINT files_gid_u32_check CHECK (gid BETWEEN 0 AND 4294967295),
     inode_seed TEXT NOT NULL,
     unlinked BOOLEAN NOT NULL DEFAULT FALSE,
     modification_date TIMESTAMP NOT NULL,
@@ -74,8 +76,10 @@ EXECUTE FUNCTION fod_bump_file_content_generation();
 CREATE TABLE IF NOT EXISTS special_files (
     id_file INTEGER PRIMARY KEY REFERENCES files(id_file) ON DELETE CASCADE,
     file_type VARCHAR(10) NOT NULL,
-    rdev_major INTEGER NOT NULL DEFAULT 0,
-    rdev_minor INTEGER NOT NULL DEFAULT 0
+    rdev_major BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT special_files_rdev_major_u32_check CHECK (rdev_major BETWEEN 0 AND 4294967295),
+    rdev_minor BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT special_files_rdev_minor_u32_check CHECK (rdev_minor BETWEEN 0 AND 4294967295)
 );
 
 CREATE TABLE IF NOT EXISTS hardlinks (
@@ -84,8 +88,8 @@ CREATE TABLE IF NOT EXISTS hardlinks (
     id_directory INTEGER REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT hardlinks_name_octet_length_check CHECK (octet_length(name) <= 255),
-    uid INTEGER NOT NULL,
-    gid INTEGER NOT NULL,
+    uid BIGINT NOT NULL CONSTRAINT hardlinks_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
+    gid BIGINT NOT NULL CONSTRAINT hardlinks_gid_u32_check CHECK (gid BETWEEN 0 AND 4294967295),
     modification_date TIMESTAMP NOT NULL,
     access_date TIMESTAMP NOT NULL,
     change_date TIMESTAMP NOT NULL,
@@ -98,8 +102,8 @@ CREATE TABLE IF NOT EXISTS symlinks (
     name VARCHAR(255) NOT NULL
         CONSTRAINT symlinks_name_octet_length_check CHECK (octet_length(name) <= 255),
     target TEXT NOT NULL,
-    uid INTEGER NOT NULL,
-    gid INTEGER NOT NULL,
+    uid BIGINT NOT NULL CONSTRAINT symlinks_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
+    gid BIGINT NOT NULL CONSTRAINT symlinks_gid_u32_check CHECK (gid BETWEEN 0 AND 4294967295),
     inode_seed TEXT NOT NULL,
     modification_date TIMESTAMP NOT NULL,
     access_date TIMESTAMP NOT NULL,
@@ -110,7 +114,7 @@ CREATE TABLE IF NOT EXISTS symlinks (
 CREATE TABLE IF NOT EXISTS data_blocks (
     id_block SERIAL PRIMARY KEY,
     data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
-    _order INTEGER NOT NULL,
+    _order BIGINT NOT NULL CONSTRAINT data_blocks_order_nonnegative_check CHECK (_order >= 0),
     data BYTEA NOT NULL
 );
 
@@ -137,7 +141,7 @@ CREATE TABLE IF NOT EXISTS schema_admin (
 
 CREATE TABLE IF NOT EXISTS journal (
     id_entry SERIAL PRIMARY KEY,
-    id_user INTEGER,
+    id_user BIGINT CONSTRAINT journal_user_u32_check CHECK (id_user BETWEEN 0 AND 4294967295),
     id_directory INTEGER REFERENCES directories(id_directory) ON DELETE SET NULL,
     id_file INTEGER REFERENCES files(id_file) ON DELETE SET NULL,
     action TEXT NOT NULL,
@@ -236,7 +240,7 @@ CREATE INDEX IF NOT EXISTS idx_lock_wait_edges_blocked
 
 CREATE TABLE IF NOT EXISTS copy_block_crc (
     data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
-    _order INTEGER NOT NULL,
+    _order BIGINT NOT NULL CONSTRAINT copy_block_crc_order_nonnegative_check CHECK (_order >= 0),
     crc32 BIGINT NOT NULL,
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (data_object_id, _order)
@@ -294,7 +298,7 @@ CREATE TABLE IF NOT EXISTS index_files (
     id_index_source INTEGER NOT NULL REFERENCES index_sources(id_index_source) ON DELETE CASCADE,
     id_scan_run INTEGER REFERENCES index_scan_runs(id_scan_run) ON DELETE SET NULL,
     path TEXT NOT NULL,
-    size BIGINT NOT NULL,
+    size BIGINT NOT NULL CONSTRAINT index_files_size_nonnegative_check CHECK (size >= 0),
     mtime_ns BIGINT,
     inode BIGINT,
     device BIGINT,
@@ -312,7 +316,8 @@ CREATE TABLE IF NOT EXISTS index_file_hashes (
     partial_hash BYTEA,
     full_hash BYTEA,
     hash_status TEXT NOT NULL,
-    observed_size BIGINT NOT NULL,
+    observed_size BIGINT NOT NULL
+        CONSTRAINT index_file_hashes_observed_size_nonnegative_check CHECK (observed_size >= 0),
     observed_mtime_ns BIGINT,
     observed_inode BIGINT,
     observed_device BIGINT,
@@ -324,9 +329,10 @@ CREATE TABLE IF NOT EXISTS index_duplicate_sets (
     id_duplicate_set SERIAL PRIMARY KEY,
     hash_algorithm TEXT NOT NULL,
     full_hash BYTEA NOT NULL,
-    file_size BIGINT NOT NULL,
-    file_count INTEGER NOT NULL,
-    total_bytes BIGINT NOT NULL,
+    file_size BIGINT NOT NULL
+        CONSTRAINT index_duplicate_sets_file_size_nonnegative_check CHECK (file_size >= 0),
+    file_count BIGINT NOT NULL CONSTRAINT index_duplicate_sets_file_count_nonnegative_check CHECK (file_count >= 0),
+    total_bytes BIGINT NOT NULL CONSTRAINT index_duplicate_sets_total_bytes_nonnegative_check CHECK (total_bytes >= 0),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE(hash_algorithm, full_hash, file_size)
@@ -340,13 +346,20 @@ CREATE TABLE IF NOT EXISTS index_import_plans (
     request_token TEXT NOT NULL UNIQUE,
     dry_run BOOLEAN NOT NULL DEFAULT TRUE,
     source_filter TEXT,
-    scanned_file_count INTEGER NOT NULL DEFAULT 0,
-    candidate_group_count INTEGER NOT NULL DEFAULT 0,
-    confirmed_group_count INTEGER NOT NULL DEFAULT 0,
-    unique_payload_count INTEGER NOT NULL DEFAULT 0,
-    total_source_bytes BIGINT NOT NULL DEFAULT 0,
-    estimated_import_bytes BIGINT NOT NULL DEFAULT 0,
+    scanned_file_count BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_scanned_files_nonnegative_check CHECK (scanned_file_count >= 0),
+    candidate_group_count BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_candidate_groups_nonnegative_check CHECK (candidate_group_count >= 0),
+    confirmed_group_count BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_confirmed_groups_nonnegative_check CHECK (confirmed_group_count >= 0),
+    unique_payload_count BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_unique_payloads_nonnegative_check CHECK (unique_payload_count >= 0),
+    total_source_bytes BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_source_bytes_nonnegative_check CHECK (total_source_bytes >= 0),
+    estimated_import_bytes BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_estimated_bytes_nonnegative_check CHECK (estimated_import_bytes >= 0),
     saved_bytes BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_import_plans_saved_bytes_nonnegative_check CHECK (saved_bytes >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS index_import_plan_entries (
@@ -358,7 +371,7 @@ CREATE TABLE IF NOT EXISTS index_import_plan_entries (
     canonical_file_id INTEGER REFERENCES index_files(id_file),
     logical_path TEXT NOT NULL,
     source_path TEXT NOT NULL,
-    size BIGINT NOT NULL,
+    size BIGINT NOT NULL CONSTRAINT index_import_plan_entries_size_nonnegative_check CHECK (size >= 0),
     mtime_ns BIGINT,
     source_changed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -607,8 +620,10 @@ CREATE TABLE IF NOT EXISTS index_catalog_snapshots (
     request_token TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
     source_filter TEXT,
-    file_count BIGINT NOT NULL DEFAULT 0,
-    total_bytes BIGINT NOT NULL DEFAULT 0,
+    file_count BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_catalog_snapshots_file_count_nonnegative_check CHECK (file_count >= 0),
+    total_bytes BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT index_catalog_snapshots_total_bytes_nonnegative_check CHECK (total_bytes >= 0),
     max_file_id BIGINT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -622,7 +637,7 @@ CREATE TABLE IF NOT EXISTS index_catalog_snapshot_files (
     source_kind TEXT NOT NULL,
     source_root TEXT NOT NULL,
     path TEXT NOT NULL,
-    size BIGINT NOT NULL,
+    size BIGINT NOT NULL CONSTRAINT index_catalog_snapshot_files_size_nonnegative_check CHECK (size >= 0),
     mtime_ns BIGINT,
     inode BIGINT,
     device BIGINT,

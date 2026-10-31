@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 33;
+const SCHEMA_VERSION: u64 = 34;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -181,6 +181,44 @@ fn schema_exists(conn: &DbConn, schema: &str) -> Result<bool, String> {
     ))
 }
 
+fn drop_schema_34_numeric_constraints(conn: &DbConn) {
+    conn.exec(
+        "ALTER TABLE fod.directories DROP CONSTRAINT IF EXISTS directories_uid_u32_check;
+         ALTER TABLE fod.directories DROP CONSTRAINT IF EXISTS directories_gid_u32_check;
+         ALTER TABLE fod.files DROP CONSTRAINT IF EXISTS files_uid_u32_check;
+         ALTER TABLE fod.files DROP CONSTRAINT IF EXISTS files_gid_u32_check;
+         ALTER TABLE fod.files DROP CONSTRAINT IF EXISTS files_size_nonnegative_check;
+         ALTER TABLE fod.hardlinks DROP CONSTRAINT IF EXISTS hardlinks_uid_u32_check;
+         ALTER TABLE fod.hardlinks DROP CONSTRAINT IF EXISTS hardlinks_gid_u32_check;
+         ALTER TABLE fod.symlinks DROP CONSTRAINT IF EXISTS symlinks_uid_u32_check;
+         ALTER TABLE fod.symlinks DROP CONSTRAINT IF EXISTS symlinks_gid_u32_check;
+         ALTER TABLE fod.special_files DROP CONSTRAINT IF EXISTS special_files_rdev_major_u32_check;
+         ALTER TABLE fod.special_files DROP CONSTRAINT IF EXISTS special_files_rdev_minor_u32_check;
+         ALTER TABLE fod.journal DROP CONSTRAINT IF EXISTS journal_user_u32_check;
+         ALTER TABLE fod.data_objects DROP CONSTRAINT IF EXISTS data_objects_file_size_nonnegative_check;
+         ALTER TABLE fod.data_objects DROP CONSTRAINT IF EXISTS data_objects_reference_count_nonnegative_check;
+         ALTER TABLE fod.data_blocks DROP CONSTRAINT IF EXISTS data_blocks_order_nonnegative_check;
+         ALTER TABLE fod.copy_block_crc DROP CONSTRAINT IF EXISTS copy_block_crc_order_nonnegative_check;
+         ALTER TABLE fod.index_files DROP CONSTRAINT IF EXISTS index_files_size_nonnegative_check;
+         ALTER TABLE fod.index_file_hashes DROP CONSTRAINT IF EXISTS index_file_hashes_observed_size_nonnegative_check;
+         ALTER TABLE fod.index_duplicate_sets DROP CONSTRAINT IF EXISTS index_duplicate_sets_file_size_nonnegative_check;
+         ALTER TABLE fod.index_duplicate_sets DROP CONSTRAINT IF EXISTS index_duplicate_sets_file_count_nonnegative_check;
+         ALTER TABLE fod.index_duplicate_sets DROP CONSTRAINT IF EXISTS index_duplicate_sets_total_bytes_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_scanned_files_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_candidate_groups_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_confirmed_groups_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_unique_payloads_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_source_bytes_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_estimated_bytes_nonnegative_check;
+         ALTER TABLE fod.index_import_plans DROP CONSTRAINT IF EXISTS index_import_plans_saved_bytes_nonnegative_check;
+         ALTER TABLE fod.index_import_plan_entries DROP CONSTRAINT IF EXISTS index_import_plan_entries_size_nonnegative_check;
+         ALTER TABLE fod.index_catalog_snapshots DROP CONSTRAINT IF EXISTS index_catalog_snapshots_file_count_nonnegative_check;
+         ALTER TABLE fod.index_catalog_snapshots DROP CONSTRAINT IF EXISTS index_catalog_snapshots_total_bytes_nonnegative_check;
+         ALTER TABLE fod.index_catalog_snapshot_files DROP CONSTRAINT IF EXISTS index_catalog_snapshot_files_size_nonnegative_check",
+    )
+    .expect("drop schema 34 numeric constraints for an older-schema fixture");
+}
+
 fn assert_latest_payload_schema(conn: &DbConn) {
     let matches = conn
         .query_exists(
@@ -222,6 +260,27 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                           AND c.contype = 'c'
                     )
                 )
+                AND (
+                    SELECT COUNT(*)
+                    FROM information_schema.columns c
+                    WHERE c.table_schema = 'fod'
+                      AND c.data_type = 'bigint'
+                      AND (c.table_name, c.column_name) IN (
+                        ('directories', 'uid'), ('directories', 'gid'),
+                        ('files', 'uid'), ('files', 'gid'), ('files', 'size'),
+                        ('hardlinks', 'uid'), ('hardlinks', 'gid'),
+                        ('symlinks', 'uid'), ('symlinks', 'gid'),
+                        ('special_files', 'rdev_major'), ('special_files', 'rdev_minor'),
+                        ('journal', 'id_user'),
+                        ('data_objects', 'file_size'), ('data_objects', 'reference_count'),
+                        ('data_blocks', '_order'), ('copy_block_crc', '_order'),
+                        ('index_duplicate_sets', 'file_count'),
+                        ('index_import_plans', 'scanned_file_count'),
+                        ('index_import_plans', 'candidate_group_count'),
+                        ('index_import_plans', 'confirmed_group_count'),
+                        ('index_import_plans', 'unique_payload_count')
+                      )
+                ) = 21
                 AND
                 (
                     SELECT COUNT(*)
@@ -339,6 +398,41 @@ fn assert_latest_payload_schema(conn: &DbConn) {
     assert!(matches, "payload tables must be owned by data objects");
 
     assert_sql_name_byte_limit(conn);
+    assert_sql_u32_uid_range(conn);
+}
+
+fn assert_sql_u32_uid_range(conn: &DbConn) {
+    conn.exec("BEGIN; SAVEPOINT u32_uid_range_probe")
+        .expect("begin u32 uid SQL probe");
+    conn.exec(
+        "UPDATE fod.directories SET uid = 4294967295, gid = 4294967295 \
+         WHERE id_parent IS NULL AND name = '/'",
+    )
+    .expect("SQL must accept the full Linux u32 uid/gid range");
+    let maximum_ids = conn
+        .query_scalar_text(
+            "SELECT uid::text || ':' || gid::text FROM fod.directories \
+             WHERE id_parent IS NULL AND name = '/'",
+        )
+        .expect("read maximum SQL uid/gid")
+        .expect("root directory row");
+    assert_eq!(maximum_ids, "4294967295:4294967295");
+    conn.exec("ROLLBACK TO SAVEPOINT u32_uid_range_probe")
+        .expect("rollback maximum uid/gid probe");
+
+    assert!(
+        conn.exec(
+            "UPDATE fod.directories SET uid = 4294967296 \
+             WHERE id_parent IS NULL AND name = '/'"
+        )
+        .is_err(),
+        "SQL must reject values outside the Linux u32 uid/gid range"
+    );
+    conn.exec(
+        "ROLLBACK TO SAVEPOINT u32_uid_range_probe; \
+               RELEASE SAVEPOINT u32_uid_range_probe; COMMIT",
+    )
+    .expect("finish u32 uid SQL probe");
 }
 
 fn assert_sql_name_byte_limit(conn: &DbConn) {
@@ -372,6 +466,7 @@ fn assert_sql_name_byte_limit(conn: &DbConn) {
 }
 
 fn prepare_version_16_payload_fixture(conn: &DbConn) {
+    drop_schema_34_numeric_constraints(conn);
     conn.exec(&format!(
         "SET search_path TO fod, public;
          INSERT INTO data_objects
@@ -912,10 +1007,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 33",
+        "FOD schema version: 34",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 33",
+        "Latest migration version: 34",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -952,6 +1047,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0031: 0031_minimum_client_version.sql",
         "0032: 0032_schema_upgrade_state.sql",
         "0033: 0033_byte_length_name_limits.sql",
+        "0034: 0034_align_numeric_column_ranges.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -964,6 +1060,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
     )));
     assert!(status_after_init.contains("FOD schema upgrade in progress: no"));
 
+    drop_schema_34_numeric_constraints(&conn);
     conn.exec(
         "ALTER TABLE directories DROP CONSTRAINT directories_name_octet_length_check; \
          ALTER TABLE files DROP CONSTRAINT files_name_octet_length_check; \
@@ -1150,10 +1247,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 33",
+        "Latest migration version: 34",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -1278,8 +1375,28 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         String::from_utf8_lossy(&init.stderr)
     );
 
+    drop_schema_34_numeric_constraints(&conn);
     conn.exec(
         "DROP TABLE fod.monitor_session_stats;
+         ALTER TABLE fod.directories ALTER COLUMN uid TYPE INTEGER;
+         ALTER TABLE fod.directories ALTER COLUMN gid TYPE INTEGER;
+         ALTER TABLE fod.files ALTER COLUMN uid TYPE INTEGER;
+         ALTER TABLE fod.files ALTER COLUMN gid TYPE INTEGER;
+         ALTER TABLE fod.hardlinks ALTER COLUMN uid TYPE INTEGER;
+         ALTER TABLE fod.hardlinks ALTER COLUMN gid TYPE INTEGER;
+         ALTER TABLE fod.symlinks ALTER COLUMN uid TYPE INTEGER;
+         ALTER TABLE fod.symlinks ALTER COLUMN gid TYPE INTEGER;
+         ALTER TABLE fod.special_files ALTER COLUMN rdev_major TYPE INTEGER;
+         ALTER TABLE fod.special_files ALTER COLUMN rdev_minor TYPE INTEGER;
+         ALTER TABLE fod.journal ALTER COLUMN id_user TYPE INTEGER;
+         ALTER TABLE fod.data_objects ALTER COLUMN reference_count TYPE INTEGER;
+         ALTER TABLE fod.data_blocks ALTER COLUMN _order TYPE INTEGER;
+         ALTER TABLE fod.copy_block_crc ALTER COLUMN _order TYPE INTEGER;
+         ALTER TABLE fod.index_duplicate_sets ALTER COLUMN file_count TYPE INTEGER;
+         ALTER TABLE fod.index_import_plans ALTER COLUMN scanned_file_count TYPE INTEGER;
+         ALTER TABLE fod.index_import_plans ALTER COLUMN candidate_group_count TYPE INTEGER;
+         ALTER TABLE fod.index_import_plans ALTER COLUMN confirmed_group_count TYPE INTEGER;
+         ALTER TABLE fod.index_import_plans ALTER COLUMN unique_payload_count TYPE INTEGER;
          CREATE INDEX idx_data_blocks_data_object_id
              ON fod.data_blocks (data_object_id);
          ALTER TABLE fod.directories DROP CONSTRAINT directories_name_octet_length_check;
@@ -1304,7 +1421,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 33"),
+        status_before_text.contains("Latest migration version: 34"),
         "{status_before_text}"
     );
     assert!(
@@ -1317,7 +1434,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     );
     assert!(
         status_before_text.contains(
-            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033"
+            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034"
         ),
         "{status_before_text}"
     );
@@ -1366,7 +1483,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 33"),
+        status_broken_text.contains("FOD schema version: 34"),
         "{status_broken_text}"
     );
     assert!(

@@ -411,7 +411,7 @@ also pass.
 
 ## Database schema and primary-authoritative mutations
 
-Current PostgreSQL schema version is 33; the migration manifest in
+Current PostgreSQL schema version is 34; the migration manifest in
 `rust_mkfs/src/main.rs` is authoritative. Earlier schema numbers below identify
 the migrations that introduced particular contracts.
 
@@ -434,7 +434,7 @@ release may mount without raising the floor; the floor moves only when an
 operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
-Since FOD 3.4.442, the runtime requires schema version 33. Before applying migrations,
+Since FOD 3.4.443, the runtime requires schema version 34. Before applying migrations,
 `mkfs.fod upgrade` raises the database client floor and sets
 `schema_version.upgrade_in_progress` transactionally. Mount admission checks
 that marker; client-session registration uses a shared PostgreSQL advisory
@@ -442,7 +442,7 @@ lock, while upgrades hold its exclusive counterpart and refuse to proceed when
 unexpired FOD sessions exist. A PostgreSQL trigger also rejects legacy client
 session inserts while the gate is set. The final schema number, release floor,
 and cleared marker publish in one transaction. A physical standby below schema
-33 rejects the new client until WAL replay catches up. Replica startup reads the
+34 rejects the new client until WAL replay catches up. Replica startup reads the
 client floor and upgrade marker from the writable primary, so WAL lag cannot
 admit an outdated client. Client-session registration also rechecks both gates
 under the shared advisory lock, closing the race between the startup snapshot

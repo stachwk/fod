@@ -731,7 +731,7 @@ impl DbRepo {
                         hash_algorithm TEXT NOT NULL,
                         full_hash BYTEA NOT NULL,
                         file_size BIGINT NOT NULL,
-                        file_count INTEGER NOT NULL,
+                        file_count BIGINT NOT NULL,
                         total_bytes BIGINT NOT NULL
                     ) ON COMMIT PRESERVE ROWS;
                     TRUNCATE index_duplicate_sets_stage

@@ -14,13 +14,14 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **Dokończyć audyt zakresów liczbowych wymuszanych przez schemat SQL.**
-  Audyt `docs/SQL_SCHEMA_LIMIT_AUDIT.md` wykazał signed `INTEGER` dla UID/GID,
-  kluczy `SERIAL` oraz indeksu bloku, a także brak ogólnych ograniczeń
-  nieujemności dla rozmiarów i `_order`. Ustalić wymagane zakresy POSIX/FUSE i
-  FOD, sprawdzić wartości istniejących danych, walidację transakcyjną oraz
-  konsekwencje migracji. Nie rozszerzać typów ani nie dodawać ograniczeń bez
-  tego sprawdzenia.
+- [ ] **Dokończyć audyt rozmiarów identyfikatorów i reprezentacji `mode` w SQL.**
+  `docs/SQL_SCHEMA_LIMIT_AUDIT.md` dokumentuje, że klucze `SERIAL` i wiele
+  relacyjnych `INTEGER` nadal ograniczają obiekty do zakresu signed 32-bit,
+  mimo że Rust używa `u64`; `mode VARCHAR(6)` ogranicza długość, ale nie
+  waliduje formatu. Migracja identyfikatorów musi zmienić komplet kluczy
+  głównych i obcych. BIGINT pozostaje signed, mimo że liczniki Rust są `u64`;
+  ustalić, czy potrzebny jest zakres ponad `i64::MAX`. Sprawdzić istniejące dane
+  i kontrakt przed zmianą.
 
 - [x] **Egzekwować w PostgreSQL bajtowy limit 255 dla nazw FOD.** `VARCHAR(255)`
   liczyło znaki, a nazwy komponentów Linuxa są limitowane bajtami; ponadto
@@ -29,6 +30,15 @@ Reading guide:
   dzierżawy. Migracja i świeży schemat mają te same warunki. Test schematu
   sprawdza granicę 255 bajtów oraz odrzucenie 256-bajtowej nazwy UTF-8 przez
   bezpośredni SQL.
+
+- [x] **Dopasować numeryczne kolumny SQL do domen używanych przez FOD/Linux.**
+  Schema 34 używa `BIGINT` z zakresem `u32` dla UID/GID, `journal.id_user` i
+  numerów urządzeń, `BIGINT` dla indeksów bloków i liczników używanych jako
+  `u64`, oraz odrzuca ujemne rozmiary, indeksy i liczniki. Bezpośrednie testy
+  SQL sprawdzają `u32::MAX` oraz odrzucenie wartości większej. Limity kluczy
+  `SERIAL`/`INTEGER` pozostają osobnym punktem audytu. Odczytowe sprawdzenie
+  istniejącej bazy wykazało zero wartości naruszających nowe nieujemne zakresy
+  i zakres `u32`; baza nie była modyfikowana.
 
 - [x] **Rename replacement must preserve an open destination inode across mounts.**
   A mounted two-mount regression opened the destination on mount B, replaced its
