@@ -35,7 +35,10 @@ Stan implementacji:
   direct I/O i omija wcześniej zapełnione wpisy także po przeładowaniu
   konfiguracji; poprzednia implementacja zachowywała pojemność co najmniej
   jednego bloku, a pojedynczy odczyt mógł nadal trafić do już zapełnionego
-  cache. Macierz TX03J.1 trzeba powtórzyć dla poprawnie wyłączonego cache.
+  cache. Wpisy nie są jednak usuwane przy wyłączeniu; po ponownym włączeniu
+  cache mogą wrócić do odczytu. Trzeba ustalić i zweryfikować zachowanie tej
+  zmiany runtime, zanim zostanie uznana za bezpieczną. Macierz TX03J.1 trzeba
+  powtórzyć dla poprawnie wyłączonego cache.
 - Zdalny trwały dziennik zdarzeń, zwykły runtime listener FUSE i selektywne
   unieważnianie cache jądra nie są zaimplementowane. `fsync()` nie czeka dziś
   na potwierdzenia innych mountów.
