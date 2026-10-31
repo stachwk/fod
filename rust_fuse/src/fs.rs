@@ -971,16 +971,8 @@ fn heartbeat_pg_mount_state(
         }
     }
 
-    let snapshot = match posix_locks.lock() {
-        Ok(guard) => guard
-            .iter()
-            .map(|(resource_key, records)| (resource_key.clone(), records.clone()))
-            .collect::<Vec<_>>(),
-        Err(err) => {
-            warn!("FOD lock heartbeat skipped: poisoned lock map: {}", err);
-            return true;
-        }
-    };
+    let (snapshot, lock_map_poisoned) = snapshot_posix_locks(posix_locks);
+    failed |= lock_map_poisoned;
 
     for (resource_key, records) in snapshot {
         let (resource_kind, resource_id) = match FodFuse::lock_resource_kind_id(&resource_key) {
@@ -1016,6 +1008,72 @@ fn heartbeat_pg_mount_state(
     }
 
     failed
+}
+
+fn snapshot_posix_locks(
+    posix_locks: &Mutex<HashMap<String, Vec<PosixLockRecord>>>,
+) -> (Vec<(String, Vec<PosixLockRecord>)>, bool) {
+    match posix_locks.lock() {
+        Ok(guard) => (
+            guard
+                .iter()
+                .map(|(resource_key, records)| (resource_key.clone(), records.clone()))
+                .collect(),
+            false,
+        ),
+        Err(err) => {
+            warn!("FOD lock heartbeat recovering poisoned lock map: {}", err);
+            let guard = err.into_inner();
+            (
+                guard
+                    .iter()
+                    .map(|(resource_key, records)| (resource_key.clone(), records.clone()))
+                    .collect(),
+                true,
+            )
+        }
+    }
+}
+
+fn local_lock_records_for_key(
+    posix_locks: &Mutex<HashMap<String, Vec<PosixLockRecord>>>,
+    resource_key: &str,
+) -> Result<Vec<PosixLockRecord>, libc::c_int> {
+    posix_locks
+        .lock()
+        .map(|guard| guard.get(resource_key).cloned().unwrap_or_default())
+        .map_err(|err| {
+            warn!(
+                "FOD local lock lookup failed resource_key={} err=poisoned lock map: {}",
+                resource_key, err
+            );
+            EIO
+        })
+}
+
+fn refresh_local_lock_owner_state(
+    posix_locks: &Mutex<HashMap<String, Vec<PosixLockRecord>>>,
+    local_lock_owners: &Mutex<HashSet<u64>>,
+    owner: u64,
+) {
+    let still_present = match posix_locks.lock() {
+        Ok(guard) => guard
+            .values()
+            .any(|records| records.iter().any(|record| record.owner == owner)),
+        Err(err) => {
+            // A poisoned local mirror does not prove PostgreSQL lock leases ended.
+            warn!(
+                "FOD lock owner refresh skipped owner={} err=poisoned lock map: {}",
+                owner, err
+            );
+            return;
+        }
+    };
+    if !still_present {
+        if let Ok(mut guard) = local_lock_owners.lock() {
+            guard.remove(&owner);
+        }
+    }
 }
 
 fn runtime_override_snapshot(repo: &DbRepo) -> Result<HashMap<String, String>, String> {
@@ -3346,12 +3404,7 @@ impl FodFuse {
             }
             Ok(records)
         } else {
-            Ok(self
-                .posix_locks
-                .lock()
-                .ok()
-                .and_then(|guard| guard.get(resource_key).cloned())
-                .unwrap_or_default())
+            local_lock_records_for_key(&self.posix_locks, resource_key)
         }
     }
 
@@ -3478,21 +3531,7 @@ impl FodFuse {
     }
 
     fn refresh_local_lock_owner_state(&self, owner: u64) {
-        let still_present = self
-            .posix_locks
-            .lock()
-            .ok()
-            .map(|guard| {
-                guard
-                    .values()
-                    .any(|records| records.iter().any(|record| record.owner == owner))
-            })
-            .unwrap_or(false);
-        if !still_present {
-            if let Ok(mut guard) = self.local_lock_owners.lock() {
-                guard.remove(&owner);
-            }
-        }
+        refresh_local_lock_owner_state(&self.posix_locks, &self.local_lock_owners, owner);
     }
 
     fn clear_locks_for_owner(&self, owner: u64) -> Vec<String> {
@@ -5516,6 +5555,30 @@ impl FodFuse {
     fn clear_locks_for_owner_and_sync(&self, owner: u64, context: &str, fh: u64) {
         self.register_local_lock_owner(owner);
         if self.lock_backend_is_pg() {
+            if self.posix_locks.is_poisoned() {
+                match self.repo.delete_lock_range_leases_for_owner(owner) {
+                    Ok(()) => {
+                        if let Err(err) = self.repo.clear_lock_wait_edges_for_owner(owner) {
+                            warn!(
+                                "FOD {} recovered lock owner but could not clear its wait edges fh={} owner={} err={}",
+                                context, fh, owner, err
+                            );
+                        }
+                        if let Ok(mut guard) = self.local_lock_owners.lock() {
+                            guard.remove(&owner);
+                        }
+                        warn!(
+                            "FOD {} recovered poisoned lock map by deleting PostgreSQL owner leases fh={} owner={}",
+                            context, fh, owner
+                        );
+                    }
+                    Err(err) => warn!(
+                        "FOD {} could not clear PostgreSQL lock owner after lock-map poison fh={} owner={} err={}",
+                        context, fh, owner, err
+                    ),
+                }
+                return;
+            }
             if let Err(err) = self.repo.clear_lock_wait_edges_for_owner(owner) {
                 warn!(
                     "FOD {} clear lock wait edges failed fh={} owner={} err={}",
@@ -10811,8 +10874,9 @@ mod tests {
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
-    use std::collections::{BTreeMap, HashMap};
-    use std::sync::Arc;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime};
 
     #[test]
@@ -10905,6 +10969,38 @@ mod tests {
                 Err(errno) if errno == crate::errno::EIO
             ));
         }
+    }
+
+    #[test]
+    fn poisoned_local_lock_map_fails_closed_and_keeps_owner_heartbeat() {
+        let posix_locks = Mutex::new(HashMap::from([(
+            "file:7".to_string(),
+            vec![super::PosixLockRecord {
+                owner: 41,
+                typ: libc::F_WRLCK,
+                start: 0,
+                end: Some(9),
+                pid: 123,
+            }],
+        )]));
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = posix_locks.lock().unwrap();
+            panic!("poison lock map for regression test");
+        }));
+        assert!(panic_result.is_err());
+
+        assert!(matches!(
+            super::local_lock_records_for_key(&posix_locks, "file:7"),
+            Err(errno) if errno == crate::errno::EIO
+        ));
+        let (snapshot, poisoned) = super::snapshot_posix_locks(&posix_locks);
+        assert!(poisoned);
+        assert_eq!(snapshot[0].0, "file:7");
+        assert_eq!(snapshot[0].1[0].owner, 41);
+
+        let local_lock_owners = Mutex::new(HashSet::from([41]));
+        super::refresh_local_lock_owner_state(&posix_locks, &local_lock_owners, 41);
+        assert!(local_lock_owners.lock().unwrap().contains(&41));
     }
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
