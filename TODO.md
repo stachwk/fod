@@ -1024,7 +1024,12 @@ Reading guide:
   query reports SQLSTATE `42703` and mount startup aborts; evidence from the full
   two-mount suite on 2026-10-30:
   `artifacts/integration/unlink-primary-authority-20261030T110515Z/results.json`
-  (`startup_config_query_failure_aborts_mount: true`). The hardlink-count query
+  (`startup_config_query_failure_aborts_mount: true`). FOD 3.4.506 also routes
+  startup recovery, schema readiness, required-config existence and upgrade
+  state through the strict PostgreSQL boolean decoder, so malformed bool text
+  aborts startup instead of becoming false. Formatting and hotpath compilation
+  pass; no database fault injection was run for this decoder change. The
+  hardlink-count query
   has a separate fault that breaks only `hardlinks.id_file` after a new file is
   visible on the replica, then checks that `stat()` returns `EIO`; evidence:
   `artifacts/integration/unlink-primary-authority-20261030T110115Z/results.json`
