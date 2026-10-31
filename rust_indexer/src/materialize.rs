@@ -212,7 +212,11 @@ fn ensure_directory_chain(
     let mut created = 0u64;
 
     for component in relative_parent.components() {
-        let component_text = component.as_os_str().to_string_lossy().to_string();
+        let component_text = component
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| "materialization path contains a non-UTF-8 component".to_string())?
+            .to_string();
         current_source_path.push(component.as_os_str());
         current_fod_path = format!("{}/{}", current_fod_path, component_text);
 
@@ -249,9 +253,12 @@ fn ensure_directory_chain(
 }
 
 fn file_name(path: &Path) -> Result<String, String> {
-    path.file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .ok_or_else(|| format!("path has no file name: {}", path.display()))
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("path has no file name: {}", path.display()))?;
+    name.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("path has a non-UTF-8 file name: {}", path.display()))
 }
 
 fn materialize_canonical_file(
