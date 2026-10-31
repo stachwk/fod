@@ -2492,3 +2492,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   `/opt/postgresql-custom/bin/pg_config` (`--with-blocksize=32`) and the
   configured FOD role reported `SHOW block_size=32768`; this change did not
   run a database test.
+
+## FOD 3.4.500 — validate IDs returned by data-object creation
+
+- [x] Route inserted, copied, hash-upserted and request-token-resolved data
+  object IDs through the shared positive-ID decoder. File and special-file
+  creation and rename replacement had separately parsed data-object IDs as
+  arbitrary `u64` values, so a malformed zero result could be attached to a
+  new inode or used in lifecycle cleanup. Verify the hotpath crate build and
+  formatting pass; no PostgreSQL operation was run.
+  PostgreSQL-backed operation coverage still requires the verified FOD 32 KiB
+  server and a disposable schema-38 database.

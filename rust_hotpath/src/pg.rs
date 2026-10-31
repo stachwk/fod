@@ -6926,10 +6926,7 @@ impl DbRepo {
             .map_err(|_| "file size contains NUL byte".to_string())?;
         let params = [&file_size];
         let res = exec_params(conn, &sql, &params)?;
-        fetch_single_text(res)?
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| "invalid id_data_object value".to_string())
+        fetch_single_positive_id(res, "data object insert RETURNING")
     }
 
     unsafe fn data_object_payload_rows_empty_on_conn(
@@ -7117,10 +7114,7 @@ impl DbRepo {
 
             let params = [&file_size];
             let res = exec_params(conn, &sql_copy_data_object, &params)?;
-            let new_data_object_id = fetch_single_text(res)?
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| "invalid id_data_object value".to_string())?;
+            let new_data_object_id = fetch_single_positive_id(res, "copied data object RETURNING")?;
             let new_data_object_id_text = CString::new(new_data_object_id.to_string())
                 .map_err(|_| "data object id contains NUL byte".to_string())?;
 
@@ -7190,10 +7184,10 @@ impl DbRepo {
                         exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
                     let existing_token = fetch_single_text_option(existing_token_res)?;
                     match existing_token {
-                        Some(existing) => existing
-                            .parse::<u64>()
-                            .map(Some)
-                            .map_err(|_| "invalid data object request token mapping".to_string()),
+                        Some(existing) => {
+                            parse_positive_u64_text(&existing, "data object request token mapping")
+                                .map(Some)
+                        }
                         None => Ok(None),
                     }
                 },
@@ -7202,18 +7196,12 @@ impl DbRepo {
                         Some(content_hash) => {
                             let params = [&file_size, content_hash];
                             let res = exec_params(conn, &sql_upsert_hash, &params)?;
-                            let text = fetch_single_text(res)?;
-                            text.trim()
-                                .parse::<u64>()
-                                .map_err(|_| "invalid id_data_object value".to_string())?
+                            fetch_single_positive_id(res, "data object hash upsert RETURNING")?
                         }
                         None => {
                             let params = [&file_size];
                             let res = exec_params(conn, &sql_insert_null, &params)?;
-                            let text = fetch_single_text(res)?;
-                            text.trim()
-                                .parse::<u64>()
-                                .map_err(|_| "invalid id_data_object value".to_string())?
+                            fetch_single_positive_id(res, "data object insert RETURNING")?
                         }
                     };
 
@@ -7221,11 +7209,8 @@ impl DbRepo {
                         .map_err(|_| "data object id contains NUL byte".to_string())?;
                     let params = [&request_token, &value_text];
                     let res = exec_params(conn, &sql_store_request_token, &params)?;
-                    let stored = fetch_single_text(res)?;
-                    let stored_id = stored
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid data object request token mapping".to_string())?;
+                    let stored_id =
+                        fetch_single_positive_id(res, "data object request token mapping")?;
                     if stored_id != value {
                         return Err("data object request token mapped to unexpected id".to_string());
                     }
@@ -11038,10 +11023,8 @@ impl DbRepo {
             return Ok(());
         }
 
-        let data_object_id = object_value
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| "invalid data_object_id value".to_string())?;
+        let data_object_id =
+            parse_positive_u64_text(&object_value, "rename replacement data_object_id")?;
         let reference_count = self
             .data_object_reference_count_on_conn(conn, data_object_id)?
             .ok_or_else(|| format!("missing data-object reference count for {data_object_id}"))?;
@@ -13211,10 +13194,8 @@ impl DbRepo {
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
-                let data_object_id = fetch_single_text(data_object_res)?
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| "failed to create data object".to_string())?;
+                let data_object_id =
+                    fetch_single_positive_id(data_object_res, "created data object RETURNING")?;
                 let data_object_id = CString::new(data_object_id.to_string())
                     .map_err(|_| "data object id contains NUL byte".to_string())?;
                 let res = if let Some(parent_id) = target_parent_id {
@@ -13490,10 +13471,8 @@ impl DbRepo {
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
-                let data_object_id = fetch_single_text(data_object_res)?
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| "failed to create data object".to_string())?;
+                let data_object_id =
+                    fetch_single_positive_id(data_object_res, "created data object RETURNING")?;
                 let data_object_id = CString::new(data_object_id.to_string())
                     .map_err(|_| "data object id contains NUL byte".to_string())?;
                 let res = if let Some(parent_id) = target_parent_id {
