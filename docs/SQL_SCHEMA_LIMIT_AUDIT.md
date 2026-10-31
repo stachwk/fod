@@ -21,7 +21,7 @@ historycznych oraz dynamicznym SQL używanym przez Rust.
 | Kolejność bloku `data_blocks._order` i `copy_block_crc._order` | `BIGINT NOT NULL` plus `CHECK (>= 0)` | Rust używa `u64` dla indeksu bloku, a plik może mieć rozmiar `BIGINT`; poprzedni signed `INTEGER` ograniczał indeks do `2^31-1`. Schema 34 rozszerza typ i odrzuca indeksy ujemne. |
 | Liczniki referencji, grup i zadań indeksatora | `BIGINT` plus ograniczenia nieujemności | Rust przechowuje je jako `u64`; `INTEGER` ograniczał je do `2^31-1`. Schema 34 poszerza `reference_count`, `file_count` oraz liczniki planów importu. PostgreSQL `BIGINT` nadal ma maksimum `2^63-1`, więc wartości `u64` powyżej tej granicy nie są obsługiwane. |
 | Klucze `SERIAL` i relacyjne kolumny `INTEGER` | `SERIAL`/`INTEGER` | Pozostają signed 32-bit; pojedyncza tabela może osiągnąć maksymalnie `2^31-1` automatycznych identyfikatorów. Konwersja wymaga wspólnej migracji kluczy głównych i wszystkich kluczy obcych, więc pozostaje osobną decyzją. |
-| `mode` w plikach i katalogach | `VARCHAR(6)` | Ogranicza wyłącznie liczbę znaków; nie waliduje składni ani semantyki trybu. |
+| `mode` w plikach i katalogach | `VARCHAR(6)` oraz `CHECK` formatu oktalnego `0..07777` | Schema 36 normalizuje historyczne wartości pełnego `st_mode` po sprawdzeniu, czy bity typu pasują do tabeli, i dodaje warunki walidujące. `VARCHAR(6)` pozostaje dla kompatybilnej reprezentacji tekstowej; limit nie służy oszczędzaniu miejsca. |
 | `symlinks.target`, ścieżki i korzenie źródeł indeksatora, ścieżka mountu, filtr źródeł, komunikaty błędów | `TEXT` | Zmienna długość jest częścią domeny tych danych. `TEXT` nie rezerwuje maksymalnej długości; PostgreSQL przechowuje rzeczywistą wartość i może kompresować duże wartości. Nie zastępować arbitralnym `VARCHAR(n)`. |
 | `inode_seed`, tokeny żądań (także tabele lease/session tworzone przez dynamiczny SQL) | `TEXT` | Wartości są generowane przez FOD i/lub kod wywołujący; wymagają ewentualnie osobnego limitu kontraktu, ale `VARCHAR(n)` nie zmniejszy zajętości dla tych samych danych. |
 | `password_hash`, `password_salt`, `minimum_client_version` | `TEXT` | Rozmiar zależy od wybranego formatu hasha/soli i wersjonowania klienta. Ustalanie limitu ma sens tylko razem z walidacją formatu i wspieranych algorytmów. |
@@ -40,14 +40,24 @@ Przed migracją wykonano tylko odczytowe sprawdzenie aktualnej bazy FOD;
 znaleziono zero ujemnych rozmiarów, indeksów bloków i liczników oraz zero
 wartości UID/GID, `id_user` i `rdev` poza zakresem `u32`.
 
+Odczytowe sprawdzenie pól `mode` w aktywnej bazie schema 31 wykazało 800
+plików z historycznymi pełnymi bitami typu (np. `100644`, ósemkowo), żadnej
+wartości o błędnym zapisie oktalnym i żadnego takiego katalogu. Bieżący parser
+FOD słusznie odrzuca pełne `st_mode`, bo typ inode jest przechowywany osobno;
+bez migracji te stare wiersze mogły zwracać `EIO`. Schema 36 usuwa typ inode
+tylko wtedy, gdy jego bity odpowiadają tabeli (`S_IFREG` dla `files`,
+`S_IFDIR` dla `directories`), po czym ogranicza obie kolumny do maksymalnie
+czterech cyfr oktalnych. Test upgrade z wersji 1 zasiewa oba historyczne
+przypadki i sprawdza wynik `644`/`755`. Baza aktywna pozostała nietknięta.
+
 ## Granice i dalsze decyzje
 
 Weryfikacja `SERIAL`/`INTEGER` dla identyfikatorów inode/obiektów oraz potrzeby
 obsługi liczników `u64` większych niż `i64::MAX` pozostają otwarte. Nie należy
 zmieniać typów identyfikatorów bez wspólnej migracji wszystkich
 kluczy głównych i obcych oraz sprawdzenia serializacji i istniejących danych.
-Kolumny `mode VARCHAR(6)` również ograniczają tylko długość znakową, nie format
-POSIX. Te pozycje są zapisane w
+Identyfikatory SQL pozostają do audytu. Reprezentacja `mode` ma już walidację
+oraz migrację danych historycznych. Te pozycje są zapisane w
 [`TODO.md`](../TODO.md); audyt nie certyfikuje pełnej zgodności POSIX ani
 wszystkich wejść SQL.
 
@@ -83,9 +93,14 @@ Domyślny obraz PostgreSQL FOD jest kompilowany z `BLCKSZ=32KiB`; wariant
 i [`scripts/publish_postgres_fod_32k.sh`](../scripts/publish_postgres_fod_32k.sh):
 Dockerfile przekazuje `--with-blocksize=32`, inicjalizuje tymczasowy klaster i
 sprawdza `postgres -C block_size`; skrypt publikacji powtarza weryfikację
-wyniku. Uruchomiony lokalnie obraz `ghcr.io/stachwk/postgres-16-fod-32k:16`
-zwrócił `32768` dla `SHOW block_size`, a `pg_config --configure` zawiera
-`--with-blocksize=32`.
+wyniku. Publikacja domyślnie wybiera 32 KiB przez
+`FOD_POSTGRES_BLOCK_SIZE_KB=32`, nazwę obrazu `postgres-16-fod-32k` i bazowy
+tag PostgreSQL 16.15; wariant 8 KiB jest jawnie wybierany jako zgodnościowy.
+Uruchomiony lokalnie obraz `ghcr.io/stachwk/postgres-16-fod-32k:16` zwrócił
+`32768` dla `SHOW block_size`, a `pg_config --configure` zawiera
+`--with-blocksize=32`. Sam tag obrazu nie jest dowodem rozmiaru strony —
+sprawdzaj parametr kompilacji i `SHOW block_size` dla obrazu, którego używa
+wdrożenie.
 
 Ścieżka plikowa ok. 3 KiB nie przekracza limitu wpisu PG32, ale na wariancie
 PG8 bezpośredni test B-tree odrzucił wpis 3216-bajtowy przy maksimum 2704

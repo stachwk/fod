@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 35;
+const SCHEMA_VERSION: u64 = 36;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -214,7 +214,9 @@ fn drop_schema_34_numeric_constraints(conn: &DbConn) {
          ALTER TABLE fod.index_import_plan_entries DROP CONSTRAINT IF EXISTS index_import_plan_entries_size_nonnegative_check;
          ALTER TABLE fod.index_catalog_snapshots DROP CONSTRAINT IF EXISTS index_catalog_snapshots_file_count_nonnegative_check;
          ALTER TABLE fod.index_catalog_snapshots DROP CONSTRAINT IF EXISTS index_catalog_snapshots_total_bytes_nonnegative_check;
-         ALTER TABLE fod.index_catalog_snapshot_files DROP CONSTRAINT IF EXISTS index_catalog_snapshot_files_size_nonnegative_check",
+         ALTER TABLE fod.index_catalog_snapshot_files DROP CONSTRAINT IF EXISTS index_catalog_snapshot_files_size_nonnegative_check;
+         ALTER TABLE fod.files DROP CONSTRAINT IF EXISTS files_mode_octal_check;
+         ALTER TABLE fod.directories DROP CONSTRAINT IF EXISTS directories_mode_octal_check",
     )
     .expect("drop schema 34 numeric constraints for an older-schema fixture");
 }
@@ -755,8 +757,9 @@ fn schema_upgrade_non_destructive_password_protected() {
     );
     assert!(
         upgrade_result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&upgrade_result.stdout)
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&upgrade_result.stdout),
+        String::from_utf8_lossy(&upgrade_result.stderr)
     );
     assert_password_source(&String::from_utf8_lossy(&upgrade_result.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
@@ -895,8 +898,9 @@ fn schema_upgrade_non_destructive_password_protected() {
     );
     assert!(
         upgrade_result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&upgrade_result.stdout)
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&upgrade_result.stdout),
+        String::from_utf8_lossy(&upgrade_result.stderr)
     );
     assert_password_source(&String::from_utf8_lossy(&upgrade_result.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
@@ -908,6 +912,22 @@ fn schema_upgrade_non_destructive_password_protected() {
         .expect("drop schema before version-one upgrade");
     conn.exec(VERSION_ONE_SCHEMA_SQL)
         .expect("create version-one schema");
+    conn.exec(
+        "INSERT INTO fod.directories
+             (id_parent, name, mode, uid, gid, inode_seed,
+              modification_date, access_date, change_date, creation_date)
+         VALUES
+             (1, 'legacy-mode-dir', '40755', 0, 0, 'legacy-mode-dir',
+              NOW(), NOW(), NOW(), NOW());
+         INSERT INTO fod.files
+             (id_directory, name, size, mode, uid, gid, inode_seed,
+              modification_date, access_date, change_date, creation_date)
+         VALUES
+             ((SELECT id_directory FROM fod.directories WHERE name = 'legacy-mode-dir'),
+              'legacy-mode-file', 0, '100644', 0, 0, 'legacy-mode-file',
+              NOW(), NOW(), NOW(), NOW());",
+    )
+    .expect("seed legacy full st_mode values before schema upgrade");
     conn.exec("INSERT INTO fod.schema_version (version, applied_at) VALUES (1, NOW())")
         .expect("record version-one schema");
 
@@ -939,6 +959,17 @@ fn schema_upgrade_non_destructive_password_protected() {
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
+
+    let normalized_directory_mode = conn
+        .query_scalar_text("SELECT mode FROM fod.directories WHERE name = 'legacy-mode-dir'")
+        .expect("normalized directory mode")
+        .expect("legacy mode directory");
+    assert_eq!(normalized_directory_mode, "755");
+    let normalized_file_mode = conn
+        .query_scalar_text("SELECT mode FROM fod.files WHERE name = 'legacy-mode-file'")
+        .expect("normalized file mode")
+        .expect("legacy mode file");
+    assert_eq!(normalized_file_mode, "644");
 
     conn.exec(&format!(
         "DROP TABLE IF EXISTS {}.{}",
@@ -1007,10 +1038,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 34",
+        "FOD schema version: 36",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 34",
+        "Latest migration version: 36",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -1049,6 +1080,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0033: 0033_byte_length_name_limits.sql",
         "0034: 0034_align_numeric_column_ranges.sql",
         "0035: 0035_hash_long_indexer_paths.sql",
+        "0036: 0036_normalize_posix_mode_values.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -1069,6 +1101,8 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
          ALTER TABLE symlinks DROP CONSTRAINT symlinks_name_octet_length_check; \
          ALTER TABLE xattrs DROP CONSTRAINT xattrs_name_octet_length_check; \
          ALTER TABLE destination_write_leases DROP CONSTRAINT destination_write_leases_name_octet_length_check; \
+         ALTER TABLE files DROP CONSTRAINT files_mode_octal_check; \
+         ALTER TABLE directories DROP CONSTRAINT directories_mode_octal_check; \
          ALTER TABLE schema_version DROP COLUMN upgrade_in_progress; \
          UPDATE schema_version SET schema_number = 31",
     )
@@ -1248,10 +1282,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 34",
+        "Latest migration version: 36",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -1422,7 +1456,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 34"),
+        status_before_text.contains("Latest migration version: 36"),
         "{status_before_text}"
     );
     assert!(
@@ -1435,7 +1469,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     );
     assert!(
         status_before_text.contains(
-            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034"
+            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036"
         ),
         "{status_before_text}"
     );
@@ -1484,7 +1518,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 34"),
+        status_broken_text.contains("FOD schema version: 36"),
         "{status_broken_text}"
     );
     assert!(

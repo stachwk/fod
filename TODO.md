@@ -35,14 +35,22 @@ Reading guide:
   upgrade, bo były w niej aktywne sesje FOD; nie zmieniano tej bazy. Zmiana
   `TEXT` na `VARCHAR(n)` nie rozwiązuje problemu.
 
-- [ ] **Dokończyć audyt rozmiarów identyfikatorów i reprezentacji `mode` w SQL.**
-  `docs/SQL_SCHEMA_LIMIT_AUDIT.md` dokumentuje, że klucze `SERIAL` i wiele
-  relacyjnych `INTEGER` nadal ograniczają obiekty do zakresu signed 32-bit,
-  mimo że Rust używa `u64`; `mode VARCHAR(6)` ogranicza długość, ale nie
-  waliduje formatu. Migracja identyfikatorów musi zmienić komplet kluczy
-  głównych i obcych. BIGINT pozostaje signed, mimo że liczniki Rust są `u64`;
-  ustalić, czy potrzebny jest zakres ponad `i64::MAX`. Sprawdzić istniejące dane
-  i kontrakt przed zmianą.
+- [ ] **Dokończyć audyt szerokości identyfikatorów SQL.** Klucze `SERIAL` i
+  relacyjne `INTEGER` nadal ograniczają zakres signed 32-bit. Przed decyzją o
+  migracji ustalić rzeczywiste zużycie identyfikatorów, prześledzić pełny graf
+  kluczy głównych i obcych oraz reprezentacje po stronie Rust/FUSE. `BIGINT`
+  pozostaje signed, mimo że część liczników Rust jest `u64`; ocenić osobno, czy
+  kontrakt wymaga wartości ponad `i64::MAX`. Nie zmieniać typów bez wspólnego
+  planu migracji i sprawdzenia danych.
+
+- [x] **Znormalizować tryby POSIX i walidować je w SQL.** Odczytowy audyt bazy
+  schema 31 znalazł 800 plików z historycznie zapisanym pełnym `st_mode`;
+  aktualny parser wymaga samych bitów uprawnień, bo typ inode jest osobnym
+  polem. Migracja 0036 sprawdza bity typu, normalizuje `files`/`directories`
+  do wartości `0..07777` i dodaje warunki `CHECK`; świeży schemat ma te same
+  warunki. Regresja upgrade z wersji 1 sprawdza normalizację pliku `100644` do
+  `644` i katalogu `40755` do `755`. Aktywna baza nie była modyfikowana.
+  Szczegóły oraz wynik audytu są w `docs/SQL_SCHEMA_LIMIT_AUDIT.md`.
 
 - [x] **Egzekwować w PostgreSQL bajtowy limit 255 dla nazw FOD.** `VARCHAR(255)`
   liczyło znaki, a nazwy komponentów Linuxa są limitowane bajtami; ponadto

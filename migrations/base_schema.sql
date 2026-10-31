@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS directories (
     id_parent INTEGER REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT directories_name_octet_length_check CHECK (octet_length(name) <= 255),
-    mode VARCHAR(6) NOT NULL,
+    mode VARCHAR(6) NOT NULL
+        CONSTRAINT directories_mode_octal_check CHECK (mode ~ '^(0o)?[0-7]{1,4}$'),
     uid BIGINT NOT NULL CONSTRAINT directories_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
     gid BIGINT NOT NULL CONSTRAINT directories_gid_u32_check CHECK (gid BETWEEN 0 AND 4294967295),
     inode_seed TEXT NOT NULL,
@@ -36,7 +37,8 @@ CREATE TABLE IF NOT EXISTS files (
     name VARCHAR(255) NOT NULL
         CONSTRAINT files_name_octet_length_check CHECK (octet_length(name) <= 255),
     size BIGINT NOT NULL CONSTRAINT files_size_nonnegative_check CHECK (size >= 0),
-    mode VARCHAR(6) NOT NULL,
+    mode VARCHAR(6) NOT NULL
+        CONSTRAINT files_mode_octal_check CHECK (mode ~ '^(0o)?[0-7]{1,4}$'),
     uid BIGINT NOT NULL CONSTRAINT files_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
     gid BIGINT NOT NULL CONSTRAINT files_gid_u32_check CHECK (gid BETWEEN 0 AND 4294967295),
     inode_seed TEXT NOT NULL,

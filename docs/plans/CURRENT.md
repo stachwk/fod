@@ -83,3 +83,11 @@ also passed. The compatibility PG8 build reproduced a 3216-byte B-tree key
 failure at the 2704-byte limit, while the digest-index test passed on both PG8
 and the default PG32 build. See [`SQL_SCHEMA_LIMIT_AUDIT.md`](../SQL_SCHEMA_LIMIT_AUDIT.md)
 and [`TODO.md`](../../TODO.md) for the implementation and evidence.
+
+Schema 36 normalizes legacy full `st_mode` values after verifying the inode
+type bits, then constrains file and directory modes to octal permission and
+special bits. A read-only scan of the active schema 31 database found 800
+affected file rows; the live database was not changed. The isolated schema
+upgrade regression seeds legacy file/directory values before upgrading. The
+open SQL-schema task is now the 32-bit `SERIAL`/`INTEGER` identifier graph and
+whether signed `BIGINT` counters need any wider domain.
