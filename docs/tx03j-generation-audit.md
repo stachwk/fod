@@ -27,7 +27,9 @@ remote event, and no SQL fill started before invalidation may publish later.
   generation and blocks in one PostgreSQL statement snapshot; legacy reads
   are unchanged.
 - `FileCacheGenerationGate` protects publication and now snapshots its
-  generation before reading cached blocks.
+  generation before reading cached blocks. Local file-cache clearing now
+  advances that file's epoch and removes its blocks under the same gate lock,
+  so a fill started before the clear cannot republish its older snapshot.
 
 ## Remaining correctness gates — do NOT enable default multi-host cache yet
 
@@ -39,6 +41,11 @@ remote event, and no SQL fill started before invalidation may publish later.
    uses the primary/write authority instead of replica-routed `with_read_connection`.
    This prevents replica lag from defeating that diagnostic mode, but does not
    add generation validation or invalidate the kernel page cache.
+   The local read-block cache also now advances its per-file epoch atomically
+   with cache clearing after local write/persist operations. A source-level
+   race review found that clearing the map without advancing the gate allowed
+   an already-running SQL fill to publish afterward. The existing gate protocol
+   now rejects that fill; runtime race validation is still pending.
 2. Cache coherence also requires selective Linux FUSE kernel page-cache
    invalidation, and safe handling of open readers, local dirty buffers,
    and race ordering. Notifications are only hints; missing notifications

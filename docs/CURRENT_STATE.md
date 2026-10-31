@@ -396,8 +396,11 @@ PostgreSQL schema 30 includes transactional per-file content generations and
 the cross-mount POSIX lock wait graph.
 These primitives and the local cache publication gate do not establish default
 cross-mount cache coherence. The [TX03J generation audit](tx03j-generation-audit.md)
-tracks missing integration; strict opt-in reads are diagnostic coverage, not
-proof that ordinary cached reads satisfy the same contract.
+tracks missing integration. Local cache clearing after writes is serialized
+against in-flight cache-fill publication, while remote generation delivery and
+kernel page-cache invalidation remain unimplemented. Strict opt-in reads are
+diagnostic coverage, not proof that ordinary cached reads satisfy the same
+contract.
 
 Explicit `FOD_DEGRADED_READONLY_ENABLED=1` mounts can read a configured physical
 standby without registering primary-backed session/open leases. They force

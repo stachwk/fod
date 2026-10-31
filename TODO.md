@@ -14,6 +14,17 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Zweryfikować wyścig publikacji odczytu rozpoczętego przed lokalnym zapisem.**
+  Przegląd źródła wykazał, że `clear_read_cache_for_file()` usuwało bloki bez
+  zmiany epoki `FileCacheGenerationGate`; trwający SQL fill mógł więc opublikować
+  stare bloki już po unieważnieniu. FOD 3.4.523 zmienia epokę i czyści wpisy
+  atomowo względem publikacji oraz odzyskuje zatrutą blokadę cache przed
+  czyszczeniem. Nie odtworzono jeszcze wyścigu barierą ani nie zweryfikowano go
+  runtime; dodaj regresję z opóźnionym fill, lokalnym zapisem i próbą późnej
+  publikacji. To dotyczy cache procesu jednego mountu i nie rozwiązuje zdalnej
+  invalidacji ani cache jądra. Szczegóły TX03J w
+  [`docs/tx03j-generation-audit.md`](docs/tx03j-generation-audit.md).
+
 - [ ] **Uruchomić regresję nie-UTF-8 nazw źródłowych indeksatora.**
   `relative_source_path()` wcześniej używało `to_string_lossy()`, przez co
   niepoprawne bajty nazwy mogły aliasować poprawną nazwę U+FFFD, a późniejszy

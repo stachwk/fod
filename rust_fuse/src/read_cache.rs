@@ -39,6 +39,19 @@ impl FileCacheGenerationGate {
         })
     }
 
+    // Serialize local content invalidation with cache-fill publication. A fill
+    // that captured the previous epoch must not republish its SQL result after
+    // the caller has cleared this file's cached blocks.
+    pub(crate) fn invalidate_and(&self, file_id: u64, invalidate: impl FnOnce()) {
+        let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.entry(file_id).or_insert(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        current.epoch = current.epoch.saturating_add(1);
+        invalidate();
+    }
+
     // Only test simulations supply synthetic remote generations today.
     // Production events must come from committed PostgreSQL state.
     #[cfg(test)]
@@ -652,11 +665,15 @@ impl FodFuse {
 
     pub(crate) fn clear_read_cache_for_file(&self, file_id: u64) {
         let started = Instant::now();
-        let result = self.read_block_cache.lock();
-        self.record_read_block_cache_lock_elapsed(started.elapsed());
-        if let Ok(mut guard) = result {
+        self.file_cache_generations.invalidate_and(file_id, || {
+            let cache_lock_started = Instant::now();
+            let mut guard = self
+                .read_block_cache
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            self.record_read_block_cache_lock_elapsed(cache_lock_started.elapsed());
             guard.clear_file(file_id);
-        }
+        });
         self.invalidate_read_metadata_for_file(file_id);
         self.record_clear_read_cache_for_file_elapsed(started.elapsed());
     }
