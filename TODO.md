@@ -974,6 +974,9 @@ Reading guide:
   only the first cell with a required single-row/single-column positive-ID
   decoder. The PostgreSQL regression rejects zero, multiple rows and extra
   columns; all 72 `pg_query` tests passed on the verified 32 KiB build.
+  FOD 3.4.484 applies the same exact one-row/one-column positive-ID check to
+  source, scan-run and import-plan staging upserts. Its pure regression covers
+  empty, duplicate, multicolumn, zero and malformed IDs.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

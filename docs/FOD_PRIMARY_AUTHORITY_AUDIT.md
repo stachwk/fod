@@ -915,3 +915,7 @@ require one row, one non-NULL column, and a positive ID, rather than accepting
 the first cell from a malformed or duplicate result. The decoder regression
 and all 72 `pg_query` tests passed on the verified PostgreSQL 16.15
 `BLCKSZ=32KiB` build using an isolated schema-38 database.
+FOD 3.4.484 applies the same exact single-positive-ID contract to the three
+staged index upserts that return a source, scan-run or import-plan ID. A pure
+unit regression checks empty, duplicate, multicolumn, zero and malformed
+results.

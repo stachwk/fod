@@ -17,6 +17,30 @@ const INDEX_FILE_HASHES_STAGE_TABLE: &str = "index_file_hashes_stage";
 const INDEX_IMPORT_PLANS_STAGE_TABLE: &str = "index_import_plans_stage";
 const INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE: &str = "index_import_plan_entries_stage";
 
+fn decode_single_positive_id(rows: Vec<Vec<String>>, description: &str) -> Result<u64, String> {
+    if rows.len() != 1 {
+        return Err(format!(
+            "{description} returned an invalid result: expected 1 row, got {}",
+            rows.len()
+        ));
+    }
+    let row = &rows[0];
+    if row.len() != 1 {
+        return Err(format!(
+            "{description} returned an invalid result: expected 1 column, got {}",
+            row.len()
+        ));
+    }
+    let id = row[0]
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("{description} returned an invalid ID: {err}"))?;
+    if id == 0 {
+        return Err(format!("{description} returned a non-positive ID"));
+    }
+    Ok(id)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexSourceStageRow {
     pub name: String,
@@ -247,14 +271,7 @@ impl DbRepo {
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let rows = query_rows_text_on_conn(conn, &lookup_sql)?;
-                let row = rows
-                    .first()
-                    .ok_or_else(|| "source registration did not return a row".to_string())?;
-                row.first()
-                    .ok_or_else(|| "source registration returned no id".to_string())?
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|err| format!("invalid source id: {err}"))
+                decode_single_positive_id(rows, "source registration")
             })
         })
     }
@@ -316,14 +333,7 @@ impl DbRepo {
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let rows = query_rows_text_on_conn(conn, &merge_sql)?;
-                let row = rows
-                    .first()
-                    .ok_or_else(|| "scan run creation did not return a row".to_string())?;
-                row.first()
-                    .ok_or_else(|| "scan run creation returned no id".to_string())?
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|err| format!("invalid scan run id: {err}"))
+                decode_single_positive_id(rows, "scan run creation")
             })
         })
     }
@@ -397,14 +407,7 @@ impl DbRepo {
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let rows = query_rows_text_on_conn(conn, &merge_sql)?;
-                let row = rows
-                    .first()
-                    .ok_or_else(|| "import plan creation did not return a row".to_string())?;
-                row.first()
-                    .ok_or_else(|| "import plan creation returned no id".to_string())?
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|err| format!("invalid import plan id: {err}"))
+                decode_single_positive_id(rows, "import plan creation")
             })
         })
     }
@@ -819,5 +822,30 @@ impl DbRepo {
                 Ok(rows.len() as u64)
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_single_positive_id;
+
+    #[test]
+    fn staged_id_decoder_requires_one_positive_scalar() {
+        assert_eq!(
+            decode_single_positive_id(vec![vec!["42".to_string()]], "staged ID"),
+            Ok(42)
+        );
+        for rows in [
+            Vec::new(),
+            vec![vec!["1".to_string()], vec!["2".to_string()]],
+            vec![vec!["1".to_string(), "extra".to_string()]],
+            vec![vec!["0".to_string()]],
+            vec![vec!["invalid".to_string()]],
+        ] {
+            assert!(
+                decode_single_positive_id(rows, "staged ID").is_err(),
+                "staged ID decoder accepted malformed rows"
+            );
+        }
     }
 }

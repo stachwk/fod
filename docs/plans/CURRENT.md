@@ -54,6 +54,9 @@ positive ID and rejects malformed result cardinality or shape. The focused
 decoder regression and all 72 `pg_query` tests passed on the verified isolated
 32 KiB PostgreSQL database. Continue the broader database fault-injection
 audit.
+FOD 3.4.484 adds exact cardinality and positivity checks to staged index ID
+upserts. The isolated pure decoder regression passes; continue reviewing
+database-backed staging behavior and the broader fault-injection audit.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both
