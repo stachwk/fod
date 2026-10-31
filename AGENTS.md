@@ -96,6 +96,11 @@ binaries instead of the running FOD build. Verify the live server with
 `SHOW block_size` using the configured PostgreSQL role; an image tag or label
 alone is not evidence of the running server's page size.
 
+When continuing PostgreSQL-related work in a later session, re-check this build
+path and, when a target server is available, its actual compiled configuration
+and runtime `SHOW block_size`. Do not rely on a previous session's observation;
+record the verified 32KiB result in the work notes when it affects the task.
+
 ## Supported build architectures
 
 Build and package FOD only for 64-bit and wider userspace architectures. Do not
