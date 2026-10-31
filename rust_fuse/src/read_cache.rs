@@ -438,6 +438,9 @@ impl ReadBlockCache {
 impl FodFuse {
     fn recent_write_blocks_limit(&self, total_blocks: u64) -> usize {
         let cache_limit = self.read_cache_limit_blocks();
+        if cache_limit == 0 {
+            return 0;
+        }
         let recent_limit = cache_limit.saturating_mul(16).max(256);
         let total_blocks = total_blocks.min(usize::MAX as u64) as usize;
         total_blocks.min(recent_limit)
@@ -445,11 +448,16 @@ impl FodFuse {
 
     pub(crate) fn read_cache_limit_blocks(&self) -> usize {
         let live = self.reloadable_runtime();
+        // Zero explicitly disables every Rust cache used by the read path.
+        // Direct-I/O prefetch must not silently re-enable it.
+        if live.read_cache_blocks == 0 {
+            return 0;
+        }
         let mut limit = live.read_cache_blocks;
         if self.fopen_direct_io && live.direct_io_read_prefetch_blocks > 0 {
             limit = limit.max(live.direct_io_read_prefetch_blocks);
         }
-        limit.max(1).min(usize::MAX as u64) as usize
+        limit.min(usize::MAX as u64) as usize
     }
 
     pub(crate) fn read_workers(&self) -> usize {
@@ -506,6 +514,10 @@ impl FodFuse {
         // Chroni przed sytuacja, gdzie drugi uchwyt buduje czesciowy blok
         // zanim kernel/FUSE/warstwa repo zwroci swiezo zapisany blok.
         let started = Instant::now();
+        if self.read_cache_limit_blocks() == 0 {
+            self.record_recent_write_block_elapsed(started.elapsed());
+            return None;
+        }
         if self.recent_write_blocks_len.load(Ordering::Relaxed) == 0 {
             self.record_recent_write_block_elapsed(started.elapsed());
             return None;
@@ -544,6 +556,9 @@ impl FodFuse {
         if last_block < first_block {
             return (Vec::new(), Vec::new());
         }
+        if self.read_cache_limit_blocks() == 0 {
+            return (Vec::new(), (first_block..=last_block).collect());
+        }
         let started = Instant::now();
         if self.recent_write_blocks_len.load(Ordering::Relaxed) != 0 {
             let total_blocks = last_block.saturating_sub(first_block).saturating_add(1);
@@ -574,10 +589,10 @@ impl FodFuse {
     }
 
     pub(crate) fn store_read_blocks(&self, file_id: u64, blocks: &[(u64, Arc<[u8]>)]) {
-        if blocks.is_empty() {
+        let limit_blocks = self.read_cache_limit_blocks();
+        if blocks.is_empty() || limit_blocks == 0 {
             return;
         }
-        let limit_blocks = self.read_cache_limit_blocks();
         let started = Instant::now();
         let result = self.read_block_cache.lock();
         self.record_read_block_cache_lock_elapsed(started.elapsed());

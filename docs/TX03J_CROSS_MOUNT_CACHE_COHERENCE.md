@@ -16,8 +16,11 @@ odczytów, a nie dowód niepoprawnego fencing.
 Późniejsza macierz TX03J.1 potwierdziła stare dane w A w sześciu
 konfiguracjach, także po dwóch sekundach; B i świeży mount C widziały nowe
 dane. Macierz ustala objaw i odrzuca samo opóźnienie jako wyjaśnienie, ale nie
-izoluje jeszcze jednoznacznie warstwy źródłowej ani nie stanowi dowodu, że
-winny jest wyłącznie page cache jądra.
+izoluje jeszcze warstwy źródłowej. Przegląd kodu wykazał, że ustawienie
+`FOD_READ_CACHE_BLOCKS=0` było podnoszone do jednego bloku, a przy direct I/O
+limit mógł być dodatkowo zwiększony przez read-ahead. Dlatego wcześniejsze
+komórki „bez read cache” nie wyłączały cache bloków Rust i nie rozstrzygają,
+czy po jego wyłączeniu pozostaje problem cache jądra lub innej warstwy.
 
 Stan implementacji:
 
@@ -28,6 +31,9 @@ Stan implementacji:
   cache.
 - Lokalny cache bloków odrzuca teraz fill rozpoczęty przed lokalnym
   unieważnieniem; wymaga to jeszcze deterministycznej walidacji runtime.
+- `FOD_READ_CACHE_BLOCKS=0` wyłącza teraz cache bloków Rust także w trybie
+  direct I/O; poprzednia implementacja zachowywała pojemność co najmniej jednego
+  bloku. Macierz TX03J.1 trzeba powtórzyć dla poprawnie wyłączonego cache.
 - Zdalny trwały dziennik zdarzeń, zwykły runtime listener FUSE i selektywne
   unieważnianie cache jądra nie są zaimplementowane. `fsync()` nie czeka dziś
   na potwierdzenia innych mountów.
@@ -132,11 +138,13 @@ Docelowa implementacja:
 
 ### Potwierdzone wyniki TX03J.1
 
-Szesc konfiguracji (domyslna, direct I/O, brak read cache, kombinacja,
-TTL metadanych zero oraz wszystkie przelaczniki jednoczesnie)
-odczytalo stare dane w A, nawet po 2 sekundach. B i swiezy C
-odczytaly zatwierdzone dane. Jest to FAIL spojnosc odczytu;
-`TX03J_DIAGNOSTIC=PASS` oznacza jedynie wykonanie pomiaru.
+Sześć konfiguracji (domyślna, direct I/O, wyłączony read cache, kombinacja,
+TTL metadanych zero oraz wszystkie przełączniki jednocześnie) odczytało stare
+dane w A, nawet po 2 sekundach; B i świeży C odczytały dane zatwierdzone.
+Jest to FAIL spójności odczytu. Komórki z `FOD_READ_CACHE_BLOCKS=0` nie
+wyłączały jednak cache Rust, więc ich wynik nie lokalizuje źródła problemu.
+Macierz musi zostać powtórzona po poprawce. `TX03J_DIAGNOSTIC=PASS` oznacza
+jedynie wykonanie pomiaru.
 
 ### Bramy wdrozenia
 
