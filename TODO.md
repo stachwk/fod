@@ -19,10 +19,15 @@ Reading guide:
   `materialize_running`. FOD 3.4.515 obejmuje już błędy setupu po zapisaniu
   planu wspólną ścieżką rollback, ale twarde zakończenie procesu nadal może
   pozostawić częściowy import w tym stanie. Zaprojektować trwały
-  lease/właściciela planu z wygaśnięciem i kontrolowanym przejęciem po
-  potwierdzeniu braku aktywnego importera. Nie zmieniać ręcznie statusu planu
+  lease/właściciela planu z fencing tokenem i kontrolowanym przejęciem po
+  potwierdzeniu braku aktywnego importera. Każda mutacja importu musi
+  weryfikować token w tej samej transakcji PostgreSQL co zapis. Sam timeout,
+  PID lub advisory lock na jednym pooled connection nie wystarcza: importer
+  wykonuje kolejne operacje na różnych połączeniach, a lease może wygasnąć
+  podczas pauzy procesu albo po failover. Nie zmieniać ręcznie statusu planu
   bez potwierdzenia, że żaden importer go nie wykonuje. Dodać regresje setup
-  failure i odmowy cleanup aktywnego planu. Szczegóły ryzyka TX-03C w
+  failure, aktywnego planu, wygasłego właściciela i starego fencing tokenu.
+  Szczegóły ryzyka TX-03C w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
 - [ ] **Dodać regresję współbieżnej adopcji i cleanup licznika obiektu.**

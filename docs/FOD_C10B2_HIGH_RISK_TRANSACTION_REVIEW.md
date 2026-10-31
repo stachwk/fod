@@ -285,6 +285,17 @@ błędy setupu, ale nie odzyskuje planu po nagłym zakończeniu procesu. Nadal
 potrzebne są regresje dla błędu setupu i aktywnego planu oraz osobny protokół
 lease/odzyskiwania po crashu.
 
+Wymaganie dla przyszłego odzyskiwania: `materialize_source()` wykonuje mutacje
+przez kolejne metody `DbRepo`, które niezależnie pobierają połączenie z puli.
+Blokada sesyjna na jednym połączeniu nie dowodzi więc, że kolejne mutacje są
+chronione tą blokadą. Sam czas wygaśnięcia także nie może autoryzować cleanup:
+proces może być wstrzymany, a potem wznowić zapis po przejęciu planu. Właściciel
+musi otrzymać fencing token, a każda mutacja importu musi sprawdzić ten token
+w tej samej transakcji co zmianę namespace/payloadu. Przejęcie cleanup musi
+atomowo zmienić token/status w PostgreSQL; stare tokeny mają być odrzucane.
+Odzyskiwanie wymaga regresji wielotransakcyjnej obejmującej wygasły plan,
+wznowienie starego właściciela i równoległe przejęcie przez cleanup.
+
 ### TX-03D — wyścig licznika współdzielonego obiektu (poprawka, test otwarty)
 
 Analiza kodu 2026-10-31 wykazała, że cleanup wylicza listę plików spoza
