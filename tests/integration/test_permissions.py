@@ -21,26 +21,38 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
-def _assert_errno_as_nobody(operation: str, path: Path, expected_errno: int) -> None:
+def _assert_errno_as_nobody(
+    operation: str, expected_errno: int, *paths: Path
+) -> None:
     script = """
 import os
 import sys
 
-operation, path = sys.argv[1:]
+operation, *paths = sys.argv[1:]
 try:
-    getattr(os, operation)(path)
+    getattr(os, operation)(*paths)
 except OSError as error:
     print(error.errno)
 else:
     raise SystemExit(f"{operation} unexpectedly succeeded")
 """
     result = subprocess.run(
-        ["sudo", "-n", "-u", "nobody", sys.executable, "-c", script, operation, str(path)],
+        [
+            "sudo",
+            "-n",
+            "-u",
+            "nobody",
+            sys.executable,
+            "-c",
+            script,
+            operation,
+            *(str(path) for path in paths),
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 0, (operation, path, result.returncode, result.stderr)
+    assert result.returncode == 0, (operation, paths, result.returncode, result.stderr)
     actual_errno = int(result.stdout.strip())
     assert actual_errno == expected_errno, (
         operation,
@@ -170,10 +182,22 @@ def main() -> None:
 
             os.chmod(sticky_file, 0o600)
 
-            _assert_errno_as_nobody("unlink", sticky_file, errno.EPERM)
-            _assert_errno_as_nobody("rmdir", sticky_subdir, errno.EPERM)
+            _assert_errno_as_nobody("unlink", errno.EPERM, sticky_file)
+            _assert_errno_as_nobody("rmdir", errno.EPERM, sticky_subdir)
+
+            sticky_rename_source = sticky_dir / "rename-source.txt"
+            sticky_rename_target = sticky_dir / "rename-target.txt"
+            sticky_rename_source.write_bytes(b"sticky rename source")
+            sticky_rename_target.write_bytes(b"sticky rename target")
+            _assert_errno_as_nobody(
+                "rename", errno.EPERM, sticky_rename_source, sticky_rename_target
+            )
+            assert sticky_rename_source.read_bytes() == b"sticky rename source"
+            assert sticky_rename_target.read_bytes() == b"sticky rename target"
 
             sticky_file.unlink()
+            sticky_rename_source.unlink()
+            sticky_rename_target.unlink()
             sticky_subdir.rmdir()
             os.chmod(sticky_dir, 0o755)
             sticky_dir.rmdir()

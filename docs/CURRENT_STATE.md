@@ -15,7 +15,9 @@ replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and
 rejected-operation preservation from both mounts. FOD 3.4.432 adds FIFO/file
 replacement cases and verifies the resulting type and cross-mount visibility.
-P08 remains open for the remaining POSIX requirements and error cases.
+FOD 3.4.433 adds a sticky-directory rename denial check: unprivileged rename
+returns `EPERM` and preserves both entries. P08 remains open for other POSIX
+requirements and error cases.
 
 ## Runtime architecture
 

@@ -1894,3 +1894,12 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   PostgreSQL 16.15; its disposable test database was dropped afterward.
 - [ ] P08 remains Pending for additional supported file-type pairs, rename
   permission/error-precedence cases, and broader cross-mount checks.
+
+## FOD 3.4.433 — verify sticky-directory rename denial
+
+- [x] Extend the mounted permission regression so an unprivileged rename in a
+  sticky directory returns exact Linux `EPERM` and leaves both source and
+  destination payloads unchanged. The focused permission test passed on Linux
+  6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL 16.15.
+- [ ] P08 remains Pending for other rename permission and error-precedence
+  cases, limits, and broader cross-mount coverage.
