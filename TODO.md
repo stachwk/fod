@@ -109,7 +109,14 @@ Reading guide:
   połączenie błędem `42P01` podczas przygotowania statementów; FOD 3.4.470
   sprawdza wersję przed tym krokiem i zwraca instrukcję `mkfs.fod upgrade`.
   Obraz PostgreSQL jest poprawnie zbudowany z `--with-blocksize=32` i zwraca
-  `block_size=32768`. Endpointy nadal wymagają uaktualnienia do schematu 39,
+  `block_size=32768`. Weryfikacja 2026-10-31 lokalnego obrazu
+  `ghcr.io/stachwk/postgres-16-fod-32k:16.15` potwierdziła wersję 16.15,
+  `--with-blocksize=32` z `/opt/postgresql-custom/bin/pg_config` oraz wynik
+  `32768` z `/opt/postgresql-custom/bin/postgres -D <tmp> -C block_size` dla
+  próbnego klastra utworzonego przez custom `initdb`. To potwierdza binaria
+  obrazu, nie aktywny endpoint. Przed testami DB trzeba sprawdzić
+  `SHOW block_size` na działającym serwerze.
+  Endpointy nadal wymagają uaktualnienia do schematu 39,
   zanim będą mogły obsłużyć bieżące testy. Do testów na odizolowanej bazie
   wskazuj pustą bazę administracyjną, z której harness tworzy tymczasową bazę;
   przed pełnym uruchomieniem `fod-rust-hotpath` potwierdź schemat endpointu.
