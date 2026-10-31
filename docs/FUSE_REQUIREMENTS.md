@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.397 (`e4510f0`). Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.398 (`11d52a6`). Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.397.
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.398.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -61,15 +61,17 @@ rzeczywisty request może ograniczyć kernel.
 
 ## Zakres callbacków
 
-FUSE jest granicą kernel-userspace, a nie osobnym standardem semantyki
-filesystemu. Część syscalli kończy się w Linux VFS przed wysłaniem requestu do
-FOD. Sukces syscalla potwierdza zachowanie całego stosu, ale nie dowodzi, że
-callback FOD został wywołany. Dokładne przykłady i przypisanie errno są w
+FUSE jest protokołem kernel-userspace, a nie standardem semantyki filesystemu.
+libfuse jest biblioteką referencyjną userspace; FOD korzysta z Rust API `fuser`
+0.18.0 przez backend libfuse3. Każda z tych warstw może ograniczać zachowanie.
+Część syscalli kończy się w Linux VFS przed wysłaniem requestu do FOD. Sukces
+syscalla potwierdza zachowanie całego stosu, ale nie dowodzi, że callback FOD
+został wywołany. Dokładne przykłady i przypisanie errno są w
 [macierzy errno](POSIX_ERRNO_MATRIX.md).
 
 | Stan w FOD | Obszary |
 | --- | --- |
-| Implementowane i objęte testami wybranych zachowań | init, lookup/forget/getattr, opendir/readdir/releasedir, readlink/statfs (w tym `EINTR` dla przerwanego `statvfs()`), xattr, access, poll, open/create/read/write/release, POSIX/flock locks, flush/fsync, setattr, namespace, copy_file_range, regular `mknod`/FIFO, symlink/link; tworzenie węzłów urządzeń nie jest wspierane |
+| Implementowane i objęte testami wybranych zachowań | init, lookup/forget/getattr/setattr, opendir/readdir/releasedir, readlink/statfs (w tym `EINTR` dla przerwanego `statvfs()`), xattr, access, poll, open/create/read/write/release, POSIX/flock locks, flush/fsync, namespace, copy_file_range, regular `mknod`/FIFO, symlink/link; tworzenie węzłów urządzeń nie jest wspierane |
 | Implementowane, lecz dowody nie pokrywają całego kontraktu | ioctl, bmap, wybrane tryby fallocate, callback lseek dla SEEK_DATA/SEEK_HOLE; obecność callbacku nie oznacza pełnej zgodności POSIX ani kompletnego pokrycia błędów |
 | Brak jawnej implementacji FOD | destroy, batch_forget, readdirplus, fsyncdir |
 | Brak callbacku w używanym wysokopoziomowym API fuser | natywne SYNCFS, TMPFILE i STATX |

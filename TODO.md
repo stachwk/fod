@@ -14,6 +14,20 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Do not treat external `dirfd()` closure as a POSIX `closedir()` test.**
+  The directory-stream regression had closed the descriptor returned by
+  `dirfd()` and then required `closedir()` to return `EBADF`, incorrectly
+  attributing that result to POSIX. POSIX `dirfd()` says closing the descriptor
+  outside the directory-stream operations has undefined behavior. The
+  Linux/glibc probe happened to return `EBADF`, but that is not portable
+  conformance evidence. Removed the assertion from the gating mounted test and
+  reclassified it in the POSIX audit as an implementation-specific diagnostic.
+  The regular `closedir()` success path remains covered. The corrected
+  `test_readdir_snapshot_multimount.py` passed on FOD 3.4.398 against isolated
+  PostgreSQL 16.15 on Linux 6.17.0-41-generic/libfuse3 3.17.4, also exercising
+  mounted `open()`/`opendir()` `EMFILE`. POSIX source: `dirfd()`; root cause
+  confidence: high.
+
 - [x] **Whole-object `copy_file_range` adoption did not serialize with source writes.**
   `adopt_source_data_object_optional_fence()` validated and locked the
   destination lease but read the source object and incremented its reference
@@ -782,8 +796,14 @@ Reading guide:
   initial child entries and checks the libc stream boundary, including `EMFILE`.
   32-bit narrow-ABI `EOVERFLOW` is outside the supported architecture matrix;
   system-wide `ENFILE` remains to be covered on supported systems. The test
-  source now includes the `closedir()` `EBADF` failure path; the helper passed
-  locally, but the full mounted test still needs an available PostgreSQL server.
+  source used to include a `closedir()` `EBADF` assertion after directly closing
+  the `dirfd()` descriptor; that assertion has been removed because POSIX
+  defines this use as undefined behavior. The mounted test passed on FOD
+  3.4.398 against an isolated database. It covers `open()`/`opendir()` `EMFILE`
+  and valid `closedir()` success. The first attempt used a stale runtime binary
+  and was rerun after rebuilding the current version; this was a test setup
+  mismatch, not a filesystem failure. System-wide `ENFILE` and remaining
+  namespace errno checks are still open.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes

@@ -1,33 +1,39 @@
 # FOD compatibility status and contracts
 
-This document records the current verified compatibility boundaries of FOD. The
-release version is sourced from `fod_version.txt` and the root Cargo workspace.
+This document is the short compatibility status page. The POSIX requirement
+ledger, Linux/libfuse runtime contract, and errno mapping each have one detailed
+owner linked below. The release version is sourced from `fod_version.txt` and
+the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: commit `e4510f0` (`FOD 3.4.397`). The POSIX audit
-remains open; the 3.4.397 copy-source fencing fix improves multi-host data
+Reviewed source baseline: commit `11d52a6` (`FOD 3.4.398`). The POSIX audit
+remains open; the preceding copy-source fencing fix improves multi-host data
 correctness but does not close a POSIX audit area. The latest POSIX-specific
 mounted evidence remains the individually versioned cases recorded in the
-[POSIX audit](POSIX_CONFORMANCE_AUDIT.md). Its two latest directory-stream
-error assertions (`EMFILE` on `open()` and `EBADF` on `closedir()`) have only
-passed their local helper so far, not the mounted regression. No new POSIX area
-is marked Pass.
+[POSIX audit](POSIX_CONFORMANCE_AUDIT.md). The mounted
+`test_readdir_snapshot_multimount.py` regression now verifies `EMFILE` from
+`open()` and `opendir()` on FOD 3.4.398; its valid `closedir()` success path is
+also covered. An earlier probe that closed a stream's `dirfd()` and observed
+`EBADF` was removed from the POSIX test because POSIX defines that use as
+undefined behavior. No new POSIX area is marked Pass.
 
 ## Overall filesystem compatibility status
 
 ### Wniosek w skrócie
 
-FOD jest filesystemem dostępnym przez Linux VFS i FUSE. Zgodność widziana przez
-program zależy łącznie od jądra, uzgodnionego protokołu FUSE/libfuse i callbacków
-FOD. Audyt obejmuje wybrane zachowania, nie certyfikuje całego Linuxa, FUSE ani
-POSIX.
+POSIX.1-2024 określa wymagane zachowanie interfejsów; Linux realizuje syscalle i
+VFS, a FUSE przenosi żądania między jądrem i procesem filesystemu. FOD dostarcza
+callbacki po stronie userspace. Wynik widziany przez program zależy od całego
+łańcucha, więc test udanego syscalla sam nie wskazuje, która warstwa wykonała
+operację. Audyt obejmuje wybrane zachowania, nie certyfikuje całego Linuxa,
+protokołu FUSE ani zgodności FOD z całym POSIX.
 
 | Obszar | Etap | Co potwierdzono | Co pozostało |
 | --- | --- | --- | --- |
 | POSIX.1-2024 | Audyt wymagań w toku; brak ogólnej deklaracji zgodności | Dwie grupy przypadków `lseek()` mają status Pass: zwykłe pozycjonowanie oraz `SEEK_DATA`/`SEEK_HOLE`. | 12 obszarów P01–P12 pozostaje Pending, ponieważ ich pełny zakres wymagań, błędów lub dowodów nie został zamknięty. Szczegóły i kryteria zamknięcia są w [audycie POSIX](POSIX_CONFORMANCE_AUDIT.md). |
-| Linux kernel/VFS | Zgodność sprawdzona dla wybranych zachowań Linux v6.17 | Testy montowane i przegląd źródeł v6.17 obejmują m.in. rozwiązywanie ścieżek, errno, uprawnienia, deskryptory i skróty VFS przed callbackiem. | Linux 4.18 jest egzekwowanym minimum, ale brak montowanego testu end-to-end na tej wersji. Nie ma pełnej macierzy wersji/dystrybucji ani audytu wszystkich zachowań jądra. |
-| FUSE/libfuse | Frontend działa przez `fuser 0.18.0`/libfuse3; protokół i capability są negocjowane w runtime | Najnowszy zapisany zestaw montowany: Linux 6.17, libfuse3 3.17.4; testy wybranych callbacków, negocjacji i przerwań. | libfuse3 3.0.0 jest egzekwowanym minimum bez testu mounta na tej wersji. Nie wszystkie operacje mają callback FOD; właścicielem szczegółowej listy jest [przewodnik Linux/FUSE](FUSE_REQUIREMENTS.md). |
+| Linux kernel/VFS | Wybrane zachowania przejrzane i sprawdzone, bez ogólnej deklaracji zgodności | Testy montowane i przegląd źródeł Linux v6.17 obejmują m.in. rozwiązywanie ścieżek, errno, uprawnienia, deskryptory i operacje kończone w VFS przed callbackiem. | Linux 4.18 jest egzekwowanym minimum, ale brak testu całego mounta na tej wersji. Brak pełnej macierzy wersji/dystrybucji i przeglądu wszystkich zachowań jądra. |
+| FUSE/libfuse | FOD używa `fuser 0.18.0` z backendem libfuse3; protokół i capability są negocjowane w runtime | Najnowsze zapisane testy montowane: Linux 6.17/libfuse3 3.17.4; wybrane callbacki, negocjacja i przerwania. | libfuse3 3.0.0 jest egzekwowanym minimum bez testu mounta na tej wersji. Część callbacków nie jest implementowana, a inne są tylko częściowo sprawdzone; szczegóły ma [przewodnik Linux/FUSE](FUSE_REQUIREMENTS.md). |
 
 `Pass` oznacza wyłącznie wskazaną grupę przypadków, a nie cały obszar POSIX.
 Linuxowe zachowanie syscalla nie dowodzi, że request dotarł do callbacku FOD.
@@ -106,7 +112,10 @@ POSIX behavior is documented as outside supported-platform coverage.
   passed mounted tests. The latest recorded mounted stack is Linux 6.17 with
   libfuse 3.17.4.
 
-The FUSE callback inventory, including implemented-but-partially-tested and
+FUSE is the Linux kernel/userspace request protocol; libfuse is a userspace
+reference library and FOD uses the Rust `fuser` API over its libfuse3 backend.
+The kernel, backend and FOD callback each impose separate compatibility limits.
+The callback inventory, including implemented-but-partially-tested and
 unavailable operations, has one owner in
 [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md). A successful syscall may be
 handled by Linux VFS or a library fallback without invoking an FOD callback.
