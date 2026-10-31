@@ -1,8 +1,9 @@
 # POSIX conformance audit
 
-Status reviewed through source baseline FOD 3.4.398, commit `11d52a6`
+Status reviewed through source baseline FOD 3.4.400, commit `3f90c99`
 (2026-10-31): **requirement audit in progress; no general POSIX conformance
-claim**.
+claim**. This release raises the enforced Linux minimum to 6.17.0; it adds no
+new POSIX test evidence.
 
 The initial matrix marks only the tested standard `lseek()` and sparse
 `SEEK_DATA`/`SEEK_HOLE` case groups Pass. The remaining groups stay Pending
@@ -26,10 +27,10 @@ test on FOD 3.4.387 also verifies that a caught signal interrupts a blocked
 are the latest recorded mounted stack. Linux 6.17.0 is now the enforced kernel
 minimum; the declared libfuse3 3.0.0 minimum has no end-to-end validation.
 
-The reviewed source baseline is FOD 3.4.398. The preceding whole-object
-`copy_file_range` source-write fencing change concerns multi-host data-object
-correctness and does not close a POSIX matrix row. The latest POSIX-specific
-implementation evidence remains the individually versioned cases below. The
+The reviewed source baseline is FOD 3.4.400. The intervening kernel-minimum
+change and preceding whole-object `copy_file_range` source-write fencing change
+do not close a POSIX matrix row. The latest POSIX-specific implementation
+evidence remains the individually versioned cases below. The
 `st_nlink` conversion boundary has a unit test, not a mounted test. The
 `open()` and `opendir()` `EMFILE` assertions and valid libc `closedir()` path
 passed in the mounted directory-stream regression on FOD 3.4.398. The invalid

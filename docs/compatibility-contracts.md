@@ -7,11 +7,12 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: commit `11d52a6` (`FOD 3.4.398`). The POSIX audit
-remains open; the preceding copy-source fencing fix improves multi-host data
-correctness but does not close a POSIX audit area. The latest POSIX-specific
-mounted evidence remains the individually versioned cases recorded in the
-[POSIX audit](POSIX_CONFORMANCE_AUDIT.md). The mounted
+Reviewed source baseline: commit `3f90c99` (`FOD 3.4.400`). This release raises
+the enforced Linux minimum to 6.17.0; it adds no POSIX conformance evidence.
+The POSIX audit remains open; the preceding copy-source fencing fix improves
+multi-host data correctness but does not close a POSIX audit area. The latest
+POSIX-specific mounted evidence remains the individually versioned cases
+recorded in the [POSIX audit](POSIX_CONFORMANCE_AUDIT.md). The mounted
 `test_readdir_snapshot_multimount.py` regression now verifies `EMFILE` from
 `open()` and `opendir()` on FOD 3.4.398; its valid `closedir()` success path is
 also covered. An earlier probe that closed a stream's `dirfd()` and observed
