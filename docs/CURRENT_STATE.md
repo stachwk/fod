@@ -4,6 +4,12 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+FOD 3.4.516 removes stale Cargo and pkg-config overrides that reported libfuse
+3.14.0 regardless of the selected system package. Local builds now inspect the
+actual resolved `fuse3.pc`; this host reports 3.17.4 and correctly fails the
+3.18.2 minimum, while the client builder selects its pinned 3.18.3 library.
+See [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
+
 FUSE namespace callbacks carry pathname components as validated UTF-8 through
 path construction and PostgreSQL calls; they do not turn invalid `OsStr` bytes
 into replacement characters with `to_string_lossy()`. A non-UTF-8 mountpoint

@@ -21,7 +21,7 @@ Recent database-decoder hardening is recorded in the [primary-authority audit](.
 FOD 3.4.475 closes one `link()` mutation-precondition gap: PostgreSQL now
 revalidates the exact source entry inside the transaction. The focused
 schema-38 regression passed with verified PostgreSQL 16.15 `BLCKSZ=32KiB`.
-The mounted two-host race remains open because the local host has libfuse 3.14.0;
+The mounted two-host race remains open because the local host has libfuse 3.17.4;
 see the authority audit and `TODO.md`.
 
 FOD 3.4.477 hardens PostgreSQL single-row and first-column result decoding:

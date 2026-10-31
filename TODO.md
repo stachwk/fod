@@ -79,7 +79,7 @@ Reading guide:
   hardlink pliku oraz hardlink symlinka, gdy backing inode nadal istnieje.
   Pozostaje test montowany z deterministycznym wyścigiem na dwóch hostach.
   Callback skompilowano profilem `release-lto` w builderze z libfuse 3.18.3.
-  Lokalny host ma libfuse 3.14.0, poniżej wymaganego 3.18.2; montowany test
+  Lokalny host ma libfuse 3.17.4, poniżej wymaganego 3.18.2; montowany test
   wymaga hosta z odpowiednią wersją libfuse i działającymi uprawnieniami FUSE.
   Szczegóły: [`docs/FOD_PRIMARY_AUTHORITY_AUDIT.md`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md).
 

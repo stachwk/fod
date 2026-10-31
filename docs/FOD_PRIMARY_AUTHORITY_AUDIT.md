@@ -865,8 +865,10 @@ The full 72-test `pg_query` suite also passed on that fresh schema-38 database.
 
 The mounted cross-host removal/replacement race has not yet been run. The
 client builder compiled the callback in `release-lto` against the repository's
-pinned libfuse 3.18.3. The local host reports libfuse 3.14.0, below FOD's
-minimum 3.18.2, so mounted race coverage still needs a capable test host.
+pinned libfuse 3.18.3. The system package reports libfuse 3.17.4, below FOD's
+minimum 3.18.2, so mounted race coverage still needs a capable test host. A
+repository Cargo/pkg-config override previously misreported this installation
+as 3.14.0; it has now been removed.
 
 ### Strict single-row PostgreSQL result decoding
 

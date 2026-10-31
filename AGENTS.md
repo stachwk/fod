@@ -149,6 +149,13 @@ capabilities must re-evaluate this floor, update the startup preflight and
 `docs/FUSE_REQUIREMENTS.md`, and add or update boundary tests. Do not silently
 continue on an older or unparseable runtime.
 
+For local builds, verify the `pkg-config` file Cargo actually resolves with
+`pkg-config --modversion fuse3` and `pkg-config --variable=pcfiledir fuse3`.
+Do not commit a stale `fuse3.pc` shim or Cargo `PKG_CONFIG_PATH` override that
+reports a different version from the selected library. Build containers may
+select their pinned libfuse through an explicit `PKG_CONFIG_PATH`; record and
+verify that selected version rather than relying on the host's default.
+
 ## Commit review
 
 After every completed, verified logical change, create a commit on `main`

@@ -175,9 +175,14 @@ z U+FFFD. Nie-UTF-8 mountpoint jest odrzucany przed rejestracją sesji zamiast
 zapisywania jego stratnej reprezentacji w PostgreSQL.
 
 Pełna macierz end-to-end dla wielu wersji Linux/libfuse i dystrybucji pozostaje
-poza pokryciem. Host systemowy nadal ma libfuse 3.17.4, ale testowe buildy
-upstream 3.18.2 i 3.18.3 zainstalowano izolowanie pod `/var/tmp`; zamontowane
-testy uruchomiono z tymi bibliotekami i helperami. Minimum runtime/build
+poza pokryciem. Host systemowy raportuje libfuse 3.17.4, czyli poniżej
+wymaganego minimum. Usunięto lokalny Cargo/pkg-config override, który błędnie
+podawał 3.14.0 niezależnie od wybranej biblioteki. Przy budowaniu należy
+sprawdzać rzeczywisty plik `fuse3.pc` przez `pkg-config --variable=pcfiledir
+fuse3` i jego wersję przez `pkg-config --modversion fuse3`; builder FOD jawnie
+wybiera libfuse 3.18.3 przez `/usr/local/lib/pkgconfig`. Testowe buildy upstream
+3.18.2 i 3.18.3 zainstalowano izolowanie pod `/var/tmp`; zamontowane testy
+uruchomiono z tymi bibliotekami i helperami. Minimum runtime/build
 ustawiono na najstarszą wersję objętą poprawką bezpieczeństwa i sprawdzoną
 montowanym testem.
 
