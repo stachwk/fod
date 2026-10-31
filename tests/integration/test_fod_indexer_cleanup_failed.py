@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import time
@@ -84,6 +85,7 @@ def main() -> None:
     shared_file_id = None
     shared_data_object_id = None
     shared_file_name = None
+    external_hardlink_path = None
     try:
         write_tree(source_root, SOURCE_FILES)
         source_snapshot = snapshot_tree(source_root)
@@ -234,6 +236,51 @@ def main() -> None:
                             "UPDATE index_import_plans SET status = %s, updated_at = NOW() WHERE id_import_plan = %s",
                             ("materialize_failed", plan_id),
                         )
+
+                external_hardlink_path = (
+                    mount.config.mountpoint / f"external-hardlink-{plan_id}"  # type: ignore[union-attr]
+                )
+                os.link(mount_root / "a.txt", external_hardlink_path)
+                wait_for_path_present(external_hardlink_path)
+                if external_hardlink_path.read_bytes() != SOURCE_FILES["a.txt"]:
+                    raise AssertionError(
+                        "external hardlink does not expose the imported payload"
+                    )
+                if os.stat(external_hardlink_path).st_ino != os.stat(
+                    mount_root / "a.txt"
+                ).st_ino:
+                    raise AssertionError("external hardlink does not share the imported inode")
+
+                try:
+                    run_indexer(ROOT, ["cleanup-failed", "--plan", str(plan_id)])
+                except AssertionError as exc:
+                    assert_contains(
+                        str(exc),
+                        "FOD_INDEXER_CLEANUP_EXTERNAL_HARDLINK",
+                        "cleanup with external hardlink",
+                    )
+                else:
+                    raise AssertionError("cleanup unexpectedly accepted an external hardlink")
+
+                if not mount_root.is_dir() or not external_hardlink_path.is_file():
+                    raise AssertionError("cleanup removed the import tree or external hardlink")
+                if (mount_root / "a.txt").read_bytes() != SOURCE_FILES["a.txt"]:
+                    raise AssertionError("rejected cleanup changed the imported payload")
+                if external_hardlink_path.read_bytes() != SOURCE_FILES["a.txt"]:
+                    raise AssertionError("cleanup changed the external hardlink payload")
+                with psycopg2.connect(**dsn) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SET search_path TO fod, public")
+                        cur.execute(
+                            "SELECT status FROM index_import_plans WHERE id_import_plan = %s",
+                            (plan_id,),
+                        )
+                        row = cur.fetchone()
+                        if row is None or row[0] != "materialize_failed":
+                            raise AssertionError(f"rejected cleanup changed plan status: {row}")
+
+                external_hardlink_path.unlink()
+                wait_for_path_missing(external_hardlink_path)
 
                 cleanup_output = run_indexer(ROOT, ["cleanup-failed", "--plan", str(plan_id)])
                 assert_contains(cleanup_output, "FOD indexer cleanup failed materialization", "cleanup")

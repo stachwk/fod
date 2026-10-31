@@ -46,8 +46,10 @@ Reading guide:
   hardlink poza tym drzewem. Bez tej kontroli `DELETE files` uruchamiał
   `ON DELETE CASCADE` i usuwał również zewnętrzny wpis. Sprawdzenie wykonuje
   się po zdobyciu blokad cyklu życia plików, które współdzieli z `link()`.
-  Dodać test potwierdzający odmowę oraz zachowanie aliasu i payloadu; testu
-  jeszcze nie uruchomiono. Szczegóły TX-03E w
+  Test `test_fod_indexer_cleanup_failed.py` teraz tworzy zewnętrzny hardlink,
+  sprawdza odmowę cleanup oraz zachowanie drzewa, aliasu i payloadu, po czym
+  usuwa alias i sprawdza poprawną ścieżkę cleanupu. Test nie został jeszcze
+  uruchomiony. Szczegóły TX-03E w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
 - [ ] **Uruchomić montowany test dwóch mountów dla wyścigu źródła `link()`.**

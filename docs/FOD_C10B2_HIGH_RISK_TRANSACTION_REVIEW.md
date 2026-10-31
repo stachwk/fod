@@ -331,9 +331,11 @@ importu. Tworzenie hardlinku bierze ten sam klucz i blokadę wiersza pliku,
 więc nowy alias nie może powstać pomiędzy sprawdzeniem i usunięciem. Jeśli
 istnieje alias poza poddrzewem, cleanup kończy się błędem
 `FOD_INDEXER_CLEANUP_EXTERNAL_HARDLINK`; transakcja nie kasuje pliku ani aliasu.
-Regresja zewnętrznego aliasu i zachowania payloadu pozostaje do dodania oraz
-uruchomienia. Jest to źródłowo potwierdzony mechanizm; nie wykonano jeszcze
-reprodukcji runtime.
+`tests/integration/test_fod_indexer_cleanup_failed.py` dodaje teraz przypadek,
+który tworzy taki alias przez zamontowany FUSE, sprawdza odmowę cleanup oraz
+zachowanie drzewa, aliasu i payloadu, a następnie usuwa alias i kontynuuje
+cleanup. Test nie został jeszcze uruchomiony, więc potwierdzenie runtime nadal
+pozostaje otwarte.
 
 - Wszystkie mutacje `indexer cleanup` mają udokumentowany porządek blokad,
   spójność ze stanem lease i jedną transakcję na **jednym backendzie PG**.
