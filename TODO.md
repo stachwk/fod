@@ -26,6 +26,19 @@ Reading guide:
   aktywnego planu. Szczegóły ryzyka TX-03C w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
+- [ ] **Naprawić wyścig licznika współdzielonego obiektu w cleanup indeksatora.**
+  `rust_indexer/src/cleanup.rs` najpierw odczytuje pliki spoza importowanego
+  drzewa, a potem bezwarunkowo ustawia `data_objects.reference_count` na tę
+  wcześniejszą liczbę. Równoległa adopcja może zwiększyć licznik pomiędzy tymi
+  zapytaniami; późniejszy zapis cleanup nadpisze przyrost i purge może usunąć
+  obiekt wciąż używany. To wyprowadzono z kolejności transakcji SQL; brak
+  runtime reprodukcji. Nie dodawać prostego `FOR UPDATE` przed usunięciem
+  plików: ścieżki unlink/replacement aktualizują licznik po zmianie pliku i
+  może powstać deadlock. Najpierw ustalić wspólny porządek blokad dla cleanup,
+  adopcji, unlink/replacement oraz FK, następnie dodać deterministyczny test
+  dwóch transakcji sprawdzający dokładny licznik i payload każdego żywego pliku.
+  Szczegóły TX-03D: `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
+
 - [ ] **Uruchomić montowany test dwóch mountów dla wyścigu źródła `link()`.**
   FOD 3.4.475 przekazuje do transakcji PostgreSQL dokładny wpis źródłowy
   `(kind, entry_id, parent_id, name)` i odrzuca go, jeśli inny host usunął lub
@@ -2607,3 +2620,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   `cargo check --offline -p fod-rust-indexer` pass. The direct regression for
   refusal remains pending; durable recovery for crashed importers is tracked
   in the unresolved finding at the top of this file.
+
+## FOD 3.4.512 — record the unresolved shared-object cleanup race
+
+- [x] Trace the interleaving where a concurrent object adoption increments
+  `reference_count` after cleanup counts surviving files but before cleanup
+  writes that count. The source-level review found a credible lost update, but
+  no safe lock change without a complete file/object lock-order analysis.
+  Runtime reproduction and a two-transaction regression remain pending; no
+  code fix is claimed. See TX-03D in
+  `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.

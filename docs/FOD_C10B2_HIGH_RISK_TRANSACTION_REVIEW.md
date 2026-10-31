@@ -278,6 +278,24 @@ rozwiązuje odzyskiwania po awarii procesu, który pozostawił plan w stanie
 kontrolowane przejęcie po jego wygaśnięciu. Regresja bezpośrednio sprawdzająca
 odmowę dla aktywnego planu pozostaje do dodania i uruchomienia.
 
+### TX-03D — wyścig licznika współdzielonego obiektu (otwarty)
+
+Analiza kodu 2026-10-31 wykazała, że cleanup wylicza listę plików spoza
+importowanego drzewa, a następnie zapisuje jej długość do `reference_count`.
+Przy izolacji PostgreSQL Read Committed równoległa adopcja może zwiększyć
+licznik między odczytem listy a tym bezwarunkowym zapisem; cleanup może
+nadpisać nowszą wartość. Zbyt niski licznik może później doprowadzić do
+usunięcia nadal współdzielonego obiektu. Ten interleaving jest wyprowadzony z
+kolejności SQL; nie odtwarzano go w runtime.
+
+Nie zastosowano naiwnego `FOR UPDATE`: unlink/replacement zmienia wiersz pliku
+przed aktualizacją licznika, więc zablokowanie obiektu przed skasowaniem pliku
+może utworzyć cykl blokad. Dalsza praca musi ustalić wspólny porządek blokad
+dla cleanup, adopcji, unlink/replacement i FK plików, a następnie dodać
+deterministyczną regresję dwóch transakcji. Wymagany wynik: po każdej
+serializacji `reference_count` odpowiada liczbie referencji `files`, a żaden
+żywy plik nie traci payloadu. Szczegóły i zadanie są w `TODO.md`.
+
 - Wszystkie mutacje `indexer cleanup` mają udokumentowany porządek blokad,
   spójność ze stanem lease i jedną transakcję na **jednym backendzie PG**.
 - Zdefiniowano, które operacje importu i legacy wymagają zaufanej zdolności,
