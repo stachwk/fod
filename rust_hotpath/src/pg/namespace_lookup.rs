@@ -7,10 +7,9 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts,
-    fetch_optional_single_row_texts, fetch_optional_single_row_texts_exact, fetch_rows_text,
-    fetch_single_optional_text, join_nul_text, parse_persisted_posix_mode, result_error, DbRepo,
-    PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement,
-    PGRES_TUPLES_OK,
+    fetch_optional_single_row_texts_exact, fetch_rows_text, fetch_single_optional_text,
+    join_nul_text, parse_persisted_posix_mode, result_error, DbRepo, PQclear, PQgetisnull,
+    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -225,8 +224,12 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&directory_id];
-            let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &params)?)?
-                .ok_or_else(|| format!("directory {directory_id:?} does not exist"))?;
+            let row = fetch_optional_single_row_texts_exact(
+                exec_params(conn, &sql, &params)?,
+                1,
+                "directory parent lookup",
+            )?
+            .ok_or_else(|| format!("directory {directory_id:?} does not exist"))?;
             if row.len() != 1 {
                 return Err("invalid directory parent row".to_string());
             }

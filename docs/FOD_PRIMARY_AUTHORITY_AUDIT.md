@@ -897,3 +897,10 @@ optional metadata readers and attribute blobs; its row-decoder regression now
 checks mismatched shapes even when a query returns zero rows. That regression
 and all 72 `pg_query` tests passed against the verified PostgreSQL 16.15
 `BLCKSZ=32KiB` server.
+FOD 3.4.481 moves all remaining production optional-row readers to the exact
+column-count decoder, covering parent permission/setgid/ACL metadata, inode
+authorization, xattr owner and existence queries, file purge state, and
+symlink promotion. The generic wrapper is now test-only. The focused decoder
+regression and all 72 `pg_query` tests passed against an isolated PostgreSQL
+16.15 database after confirming `--with-blocksize=32` and runtime
+`SHOW block_size=32768`; the temporary database was dropped.

@@ -39,6 +39,11 @@ row readers and adds a zero-row/mismatched-column regression. Continue the
 broader database fault-injection audit. The focused decoder regression and all
 72 `pg_query` tests passed against the verified PostgreSQL 16.15
 `BLCKSZ=32KiB` server.
+FOD 3.4.481 applies exact result-column contracts to every remaining production
+optional-row reader; the generic helper is now used only by decoder tests. The
+focused decoder regression and all 72 `pg_query` tests passed against an
+isolated PostgreSQL 16.15 database with `BLCKSZ=32KiB`. Continue the broader
+database fault-injection audit.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

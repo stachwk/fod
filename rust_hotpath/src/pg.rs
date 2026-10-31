@@ -2910,6 +2910,7 @@ unsafe fn fetch_single_text_option(res: *mut PGresult) -> Result<Option<String>,
     }
 }
 
+#[cfg(test)]
 unsafe fn fetch_optional_single_row_texts(
     res: *mut PGresult,
 ) -> Result<Option<Vec<String>>, String> {
@@ -6194,10 +6195,12 @@ impl DbRepo {
             CString::new("SELECT uid, mode FROM directories WHERE id_directory = $1 FOR SHARE")
                 .unwrap();
         let parent = CString::new(parent_id.to_string()).unwrap();
-        let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &[&parent])?)?
-            .ok_or_else(|| {
-                format!("{NAMESPACE_PARENT_MISSING_PREFIX} sticky parent disappeared")
-            })?;
+        let row = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &sql, &[&parent])?,
+            2,
+            "sticky parent metadata",
+        )?
+        .ok_or_else(|| format!("{NAMESPACE_PARENT_MISSING_PREFIX} sticky parent disappeared"))?;
         if row.len() != 2 {
             return Err("invalid sticky parent metadata row".to_string());
         }
@@ -6248,10 +6251,12 @@ impl DbRepo {
         )
         .unwrap();
         let parent = CString::new(parent_id.to_string()).unwrap();
-        let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &[&parent])?)?
-            .ok_or_else(|| {
-                format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared")
-            })?;
+        let row = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &sql, &[&parent])?,
+            3,
+            "parent directory metadata",
+        )?
+        .ok_or_else(|| format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"))?;
         if row.len() != 3 {
             return Err("invalid parent directory metadata row".to_string());
         }
@@ -6300,10 +6305,12 @@ impl DbRepo {
             )
         };
         let param_refs = params.iter().collect::<Vec<_>>();
-        let row = fetch_optional_single_row_texts(exec_params(conn, &sql, &param_refs)?)?
-            .ok_or_else(|| {
-                format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared")
-            })?;
+        let row = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &sql, &param_refs)?,
+            2,
+            "parent setgid metadata",
+        )?
+        .ok_or_else(|| format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"))?;
         if row.len() != 2 {
             return Err("invalid parent setgid metadata row".to_string());
         }
@@ -6352,10 +6359,12 @@ impl DbRepo {
             )
         };
         let param_refs = params.iter().collect::<Vec<_>>();
-        let rows = fetch_optional_single_row_texts(exec_params(conn, &sql, &param_refs)?)?
-            .ok_or_else(|| {
-                format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared")
-            })?;
+        let rows = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &sql, &param_refs)?,
+            4,
+            "parent ACL metadata",
+        )?
+        .ok_or_else(|| format!("{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"))?;
         if rows.len() != 4 {
             return Err("invalid parent ACL metadata row".to_string());
         }
@@ -10882,8 +10891,12 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id_param = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
-        let state = fetch_optional_single_row_texts(exec_params(conn, &sql, &[&file_id_param])?)?
-            .ok_or_else(|| "file purge state query returned no rows".to_string())?;
+        let state = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &sql, &[&file_id_param])?,
+            2,
+            "file purge state",
+        )?
+        .ok_or_else(|| "file purge state query returned no rows".to_string())?;
         if state.len() != 2 {
             return Err("file purge state returned incomplete row".to_string());
         }
@@ -11875,7 +11888,11 @@ impl DbRepo {
         )
         .unwrap();
         let delete = CString::new("DELETE FROM symlinks WHERE id_symlink=$1").unwrap();
-        let Some(alias) = fetch_optional_single_row_texts(exec_params(conn, &aliases, &[&id])?)?
+        let Some(alias) = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &aliases, &[&id])?,
+            3,
+            "symlink promotion alias",
+        )?
         else {
             return exec_command_params(conn, &delete, &[&id]);
         };

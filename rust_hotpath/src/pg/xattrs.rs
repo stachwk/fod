@@ -5,7 +5,7 @@
 //! Keep path resolution here; connection routing and SQL execution stay in `pg`.
 
 use super::{
-    exec_command_params, exec_params, fetch_optional_single_row_texts,
+    exec_command_params, exec_params, fetch_optional_single_row_texts_exact,
     is_retryable_connection_error, parse_persisted_posix_mode, replayable_sql_error, result_error,
     sql_is_replayable_command, DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples,
     PQresultStatus, PGRES_TUPLES_OK,
@@ -144,11 +144,11 @@ unsafe fn authorize_xattr_mutation_on_conn(
 ) -> Result<(), String> {
     let (table, key) = xattr_owner_table(owner_kind)?;
     let sql = CString::new(format!("SELECT uid, gid, mode FROM {table} WHERE {key}=$1")).unwrap();
-    let row = fetch_optional_single_row_texts(exec_params(
-        conn,
-        &sql,
-        &[&CString::new(owner_id.to_string()).unwrap()],
-    )?)?
+    let row = fetch_optional_single_row_texts_exact(
+        exec_params(conn, &sql, &[&CString::new(owner_id.to_string()).unwrap()])?,
+        3,
+        "xattr owner metadata",
+    )?
     .ok_or_else(|| "FOD_XATTR_OWNER_MISSING".to_string())?;
     if row.len() != 3 {
         return Err("invalid xattr owner row".to_string());
@@ -277,11 +277,14 @@ pub(super) fn prepare_default_acl_inheritance_on_conn(
             "SELECT id_directory FROM directories WHERE id_parent IS NULL AND name='/'",
         )
         .unwrap();
-        let root_row =
-            unsafe { fetch_optional_single_row_texts(exec_params(conn, &root_sql, &[])?)? }
-                .ok_or_else(|| {
-                    "FOD_NAMESPACE_PARENT_MISSING: logical root is missing".to_string()
-                })?;
+        let root_row = unsafe {
+            fetch_optional_single_row_texts_exact(
+                exec_params(conn, &root_sql, &[])?,
+                1,
+                "logical root lookup",
+            )?
+        }
+        .ok_or_else(|| "FOD_NAMESPACE_PARENT_MISSING: logical root is missing".to_string())?;
         if root_row.len() != 1 {
             return Err("invalid logical root directory row".to_string());
         }
@@ -292,8 +295,9 @@ pub(super) fn prepare_default_acl_inheritance_on_conn(
         CString::new("SELECT id_directory FROM directories WHERE id_directory = $1 FOR SHARE")
             .unwrap();
     let parent_row = unsafe { exec_params(conn, &lock_parent, &[&parent_id])? };
-    let parent_row = unsafe { fetch_optional_single_row_texts(parent_row)? }
-        .ok_or_else(|| "FOD_NAMESPACE_PARENT_MISSING".to_string())?;
+    let parent_row =
+        unsafe { fetch_optional_single_row_texts_exact(parent_row, 1, "locked parent directory")? }
+            .ok_or_else(|| "FOD_NAMESPACE_PARENT_MISSING".to_string())?;
     if parent_row.len() != 1 {
         return Err("invalid locked parent directory row".to_string());
     }
@@ -302,15 +306,20 @@ pub(super) fn prepare_default_acl_inheritance_on_conn(
         "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind = 'dir' AND owner_id = $1 AND name = 'system.posix_acl_default'",
     )
     .unwrap();
-    let encoded =
-        unsafe { fetch_optional_single_row_texts(exec_params(conn, &fetch_acl, &[&parent_id])?)? }
-            .map(|row| {
-                if row.len() != 1 {
-                    return Err("invalid default ACL result row".to_string());
-                }
-                Ok(row[0].clone())
-            })
-            .transpose()?;
+    let encoded = unsafe {
+        fetch_optional_single_row_texts_exact(
+            exec_params(conn, &fetch_acl, &[&parent_id])?,
+            1,
+            "parent default ACL",
+        )?
+    }
+    .map(|row| {
+        if row.len() != 1 {
+            return Err("invalid default ACL result row".to_string());
+        }
+        Ok(row[0].clone())
+    })
+    .transpose()?;
     let Some(encoded) = encoded else {
         return Ok((requested_mode & !umask, None));
     };
@@ -554,11 +563,11 @@ impl DbRepo {
             .map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
 
         self.with_transaction(|tx| unsafe {
-            let row = fetch_optional_single_row_texts(exec_params(
-                tx.conn,
-                &select_owner,
-                &[&owner_id],
-            )?)?
+            let row = fetch_optional_single_row_texts_exact(
+                exec_params(tx.conn, &select_owner, &[&owner_id])?,
+                1,
+                "locked xattr owner",
+            )?
             .ok_or_else(|| "FOD_XATTR_OWNER_MISSING".to_string())?;
             if row.len() != 1 {
                 return Err("invalid locked xattr owner row".to_string());
@@ -573,11 +582,11 @@ impl DbRepo {
                 actor_groups,
                 use_posix_acl,
             )?;
-            let present = fetch_optional_single_row_texts(exec_params(
-                tx.conn,
-                &exists,
-                &[&owner_kind, &owner_id, &name],
-            )?)?
+            let present = fetch_optional_single_row_texts_exact(
+                exec_params(tx.conn, &exists, &[&owner_kind, &owner_id, &name])?,
+                1,
+                "xattr existence",
+            )?
             .ok_or_else(|| "xattr existence query returned no row".to_string())?;
             if present.len() != 1 {
                 return Err("invalid xattr existence result row".to_string());
@@ -625,11 +634,11 @@ impl DbRepo {
             .map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
 
         self.with_transaction(|tx| unsafe {
-            let row = fetch_optional_single_row_texts(exec_params(
-                tx.conn,
-                &select_owner,
-                &[&owner_id],
-            )?)?
+            let row = fetch_optional_single_row_texts_exact(
+                exec_params(tx.conn, &select_owner, &[&owner_id])?,
+                1,
+                "locked xattr owner",
+            )?
             .ok_or_else(|| "FOD_XATTR_OWNER_MISSING".to_string())?;
             if row.len() != 1 {
                 return Err("invalid locked xattr owner row".to_string());
@@ -734,11 +743,11 @@ impl DbRepo {
         .unwrap();
 
         self.with_transaction(|tx| unsafe {
-            let mode_row = fetch_optional_single_row_texts(exec_params(
+            let mode_row = fetch_optional_single_row_texts_exact(exec_params(
                 tx.conn,
                 &select_mode,
                 &[&owner_id_param],
-            )?)?
+            )?, 2, "ACL owner metadata")?
             .ok_or_else(|| "FOD_XATTR_OWNER_MISSING".to_string())?;
             if mode_row.len() != 2 {
                 return Err("invalid inode owner/mode row".to_string());
@@ -751,11 +760,11 @@ impl DbRepo {
             }
             let mode_text = &mode_row[1];
             let current_mode = parse_persisted_posix_mode(mode_text)?;
-            let acl_exists = fetch_optional_single_row_texts(exec_params(
+            let acl_exists = fetch_optional_single_row_texts_exact(exec_params(
                 tx.conn,
                 &check_acl,
                 &[&owner_kind, &owner_id_param, &name],
-            )?)?
+            )?, 1, "ACL existence")?
                 .ok_or_else(|| "POSIX ACL existence query returned no row".to_string())?;
             if acl_exists.len() != 1 {
                 return Err("invalid POSIX ACL existence result row".to_string());

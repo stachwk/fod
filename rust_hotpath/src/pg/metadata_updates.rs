@@ -5,8 +5,8 @@
 //! File content generation belongs to content mutations, not metadata updates.
 
 use super::{
-    exec_command_params, exec_params, fetch_optional_single_row_texts, parse_persisted_posix_mode,
-    DbRepo, PGconn,
+    exec_command_params, exec_params, fetch_optional_single_row_texts_exact,
+    parse_persisted_posix_mode, DbRepo, PGconn,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -250,7 +250,7 @@ pub(super) unsafe fn inode_acl_allows_on_conn(
     owner_gid: u32,
     requested: u16,
 ) -> Result<Option<bool>, String> {
-    let rows = fetch_optional_single_row_texts(exec_params(
+    let rows = fetch_optional_single_row_texts_exact(exec_params(
         conn,
         &CString::new(
             "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind=$1 AND owner_id=$2 AND name='system.posix_acl_access'",
@@ -260,7 +260,7 @@ pub(super) unsafe fn inode_acl_allows_on_conn(
             &CString::new(owner_kind).map_err(|err| err.to_string())?,
             &CString::new(inode_id.to_string()).unwrap(),
         ],
-    )?)?;
+    )?, 1, "inode access ACL")?;
     let Some(rows) = rows else {
         return Ok(None);
     };
@@ -295,12 +295,18 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
     file_id: u64,
     authorization: &FileWriteAuthorization,
 ) -> Result<(), String> {
-    let rows = fetch_optional_single_row_texts(exec_params(
-        conn,
-        &CString::new("SELECT uid, gid, mode, inode_seed FROM files WHERE id_file = $1 FOR UPDATE")
+    let rows = fetch_optional_single_row_texts_exact(
+        exec_params(
+            conn,
+            &CString::new(
+                "SELECT uid, gid, mode, inode_seed FROM files WHERE id_file = $1 FOR UPDATE",
+            )
             .unwrap(),
-        &[&CString::new(file_id.to_string()).unwrap()],
-    )?)?
+            &[&CString::new(file_id.to_string()).unwrap()],
+        )?,
+        4,
+        "file write authorization",
+    )?
     .ok_or_else(|| "FOD_TRUNCATE_TARGET_MISSING".to_string())?;
     if rows.len() != 4 || rows[3] != authorization.expected_inode_seed {
         return Err("FOD_TRUNCATE_TARGET_MISSING".to_string());
@@ -312,14 +318,14 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
     }
     let mode = parse_persisted_posix_mode(&rows[2])?;
     let acl_value = if authorization.use_posix_acl {
-        fetch_optional_single_row_texts(exec_params(
+        fetch_optional_single_row_texts_exact(exec_params(
             conn,
             &CString::new(
                 "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='system.posix_acl_access'",
             )
             .unwrap(),
             &[&CString::new(file_id.to_string()).unwrap()],
-        )?)?
+        )?, 1, "file access ACL")?
             .map(|row| {
                 if row.len() != 1 {
                     return Err("invalid file access ACL result row".to_string());
@@ -561,8 +567,11 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let select_mode = CString::new("SELECT mode FROM files WHERE id_file=$1 FOR UPDATE")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let Some(row) =
-            fetch_optional_single_row_texts(exec_params(conn, &select_mode, &[&file_id])?)?
+        let Some(row) = fetch_optional_single_row_texts_exact(
+            exec_params(conn, &select_mode, &[&file_id])?,
+            1,
+            "file privilege mode",
+        )?
         else {
             return Err("file missing while clearing privilege metadata".to_string());
         };

@@ -956,6 +956,14 @@ Reading guide:
   symlink target, special-file metadata and file-unlinked decoders now apply
   the same check. The PostgreSQL row-decoder regression also verifies
   mismatched column counts on empty results.
+  FOD 3.4.481 moves every remaining production optional-row callsite to the
+  exact-column decoder, including namespace permission checks, parent ACL
+  inheritance, xattr authorization and existence checks. The unqualified
+  wrapper remains test-only; production callers cannot turn a zero-row result
+  with the wrong column shape into an ordinary absence. The focused row decoder
+  regression and all 72 `pg_query` tests passed on an isolated PostgreSQL 16.15
+  database after verifying `--with-blocksize=32` and live
+  `SHOW block_size=32768`; the disposable database was dropped afterward.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a
