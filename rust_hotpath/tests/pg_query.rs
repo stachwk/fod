@@ -2489,6 +2489,35 @@ fn live_pg_query_helpers_work() {
 }
 
 #[test]
+fn dropping_db_repo_closes_cached_postgres_connections() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let observer = repo_with_runtime()?;
+    let count_other_connections = |repo: &DbRepo| -> Result<u64, String> {
+        repo.query_scalar_text(
+            "SELECT COUNT(*)::text FROM pg_stat_activity \
+             WHERE datname = current_database() AND usename = current_user \
+               AND pid <> pg_backend_pid()",
+        )?
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("invalid PostgreSQL connection count: {err}"))
+    };
+
+    let before = count_other_connections(&observer)?;
+    let subject = repo_with_runtime()?;
+    subject.query_scalar_text("SELECT pg_backend_pid()")?;
+    drop(subject);
+    let after = count_other_connections(&observer)?;
+
+    if after != before {
+        return Err(format!(
+            "dropping DbRepo left cached PostgreSQL connections open: before={before}, after={after}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn count_file_blocks_query_failure_is_not_zero() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;
@@ -2527,8 +2556,11 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
     let name = unique_name("file_mode_metadata");
     let file_id = repo.create_file(None, &name, 0o640, 1000, 1000, &name)?;
     let path = format!("/{name}");
+    let mut mode_check_dropped = false;
 
     let result = (|| {
+        repo.exec("ALTER TABLE files DROP CONSTRAINT files_mode_octal_check")?;
+        mode_check_dropped = true;
         if authority.get_file_mode_value(&path)?.as_deref() != Some("640") {
             return Err("valid file mode lookup returned the wrong value".to_string());
         }
@@ -2606,7 +2638,16 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
         Ok(())
     })();
 
-    let cleanup = repo.purge_primary_file(file_id);
+    let purge_result = repo.purge_primary_file(file_id);
+    let constraint_result = if mode_check_dropped {
+        repo.exec(
+            "ALTER TABLE files ADD CONSTRAINT files_mode_octal_check \
+             CHECK (mode ~ '^(0o)?[0-7]{1,4}$')",
+        )
+    } else {
+        Ok(())
+    };
+    let cleanup = purge_result.and(constraint_result);
     result.and(cleanup)
 }
 
@@ -2699,6 +2740,7 @@ fn directory_count_query_failures_are_not_empty() -> Result<(), String> {
     repo.exec("CREATE TABLE fod.directories (id_parent BIGINT)")?;
     repo.exec("CREATE TABLE fod.hardlinks (id_directory BIGINT)")?;
     repo.exec("CREATE TABLE fod.symlinks (id_parent BIGINT)")?;
+    repo.exec("CREATE TABLE fod.symlink_hardlinks (id_parent BIGINT)")?;
     assert!(!repo.path_has_children(41)?);
     assert_eq!(repo.count_directory_children(41)?, 0);
 
@@ -2840,6 +2882,9 @@ fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), Stri
     )?;
     repo.exec(
         "CREATE TABLE fod.symlinks (name TEXT, id_parent BIGINT, id_symlink BIGINT, inode_seed TEXT)",
+    )?;
+    repo.exec(
+        "CREATE TABLE fod.symlink_hardlinks (name TEXT, id_parent BIGINT, id_symlink_hardlink BIGINT, id_symlink BIGINT)",
     )?;
 
     repo.exec("INSERT INTO fod.files VALUES ('null-seed', NULL, FALSE, 17, NULL)")?;
@@ -3345,32 +3390,48 @@ fn source_adoption_rejects_malformed_file_info_instead_of_falling_back() -> Resu
     let destination_object_id = repo
         .file_data_object_id(destination_file_id)?
         .ok_or_else(|| "destination is missing its data object".to_string())?;
+    let mut size_check_dropped = false;
 
-    repo.exec(&format!(
-        "UPDATE files SET size = -1 WHERE id_file = {source_file_id}"
-    ))?;
-    let error = repo
-        .adopt_source_data_object(source_file_id, destination_file_id)
-        .expect_err("negative persisted file size must fail adoption");
-    if !error.contains("invalid file size") {
-        return Err(format!("unexpected adoption error: {error}"));
-    }
-    if repo.file_data_object_id(destination_file_id)? != Some(destination_object_id) {
-        return Err("malformed source metadata changed destination data object".to_string());
-    }
-    if repo.query_scalar_text(&format!(
-        "SELECT size FROM files WHERE id_file = {destination_file_id}"
-    ))? != "0"
-    {
-        return Err("malformed source metadata changed destination size".to_string());
-    }
+    let result = (|| {
+        repo.exec("ALTER TABLE files DROP CONSTRAINT files_size_nonnegative_check")?;
+        size_check_dropped = true;
+        repo.exec(&format!(
+            "UPDATE files SET size = -1 WHERE id_file = {source_file_id}"
+        ))?;
+        let error = repo
+            .adopt_source_data_object(source_file_id, destination_file_id)
+            .err()
+            .ok_or_else(|| "negative persisted file size was accepted".to_string())?;
+        if !error.contains("invalid file size") {
+            return Err(format!("unexpected adoption error: {error}"));
+        }
+        if repo.file_data_object_id(destination_file_id)? != Some(destination_object_id) {
+            return Err("malformed source metadata changed destination data object".to_string());
+        }
+        if repo.query_scalar_text(&format!(
+            "SELECT size FROM files WHERE id_file = {destination_file_id}"
+        ))? != "0"
+        {
+            return Err("malformed source metadata changed destination size".to_string());
+        }
+        Ok(())
+    })();
 
-    repo.exec(&format!(
+    let reset_size = repo.exec(&format!(
         "UPDATE files SET size = 0 WHERE id_file = {source_file_id}"
-    ))?;
-    repo.purge_primary_file(source_file_id)?;
-    repo.purge_primary_file(destination_file_id)?;
-    Ok(())
+    ));
+    let restore_constraint = if size_check_dropped {
+        repo.exec("ALTER TABLE files ADD CONSTRAINT files_size_nonnegative_check CHECK (size >= 0)")
+    } else {
+        Ok(())
+    };
+    let purge_source = repo.purge_primary_file(source_file_id);
+    let purge_destination = repo.purge_primary_file(destination_file_id);
+    result
+        .and(reset_size)
+        .and(restore_constraint)
+        .and(purge_source)
+        .and(purge_destination)
 }
 
 #[test]

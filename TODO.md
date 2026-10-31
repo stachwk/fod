@@ -839,15 +839,20 @@ Reading guide:
   copy-on-write reference-count parse fallback was removed: malformed counts
   now fail the transaction instead of defaulting to zero and deleting a data
   object.
-  On 2026-10-31 the focused scalar-decoder PostgreSQL test passed on the
-  configured PostgreSQL 16.15 build (`--with-blocksize=32`, runtime
-  `SHOW block_size=32768`). The broader `pg_query` suite could not be evaluated:
-  64 tests failed during repository setup because the configured `foddbname`
-  lacks the `symlink_hardlinks` relation (`SQLSTATE 42P01`), while one
-  environment-only test passed. This points to a stale/incompletely migrated
-  test database, not yet to a decoder regression. Re-run the suite against a
-  fresh schema or apply the missing migration, without modifying production
-  data.
+  On 2026-10-31 the focused scalar-decoder regression passed on PostgreSQL
+  16.15 built with `--with-blocksize=32`; runtime `SHOW block_size` returned
+  `32768`. The first broad run against the configured `foddbname` found an old
+  schema without `symlink_hardlinks` (`SQLSTATE 42P01`), so it was not used for
+  verification and was left unchanged. A fresh disposable schema exposed
+  outdated minimal test fixtures, corruption probes blocked by current SQL
+  constraints, a generic missing-reference-count error, and cached libpq
+  sessions not closed when `DbRepo` was dropped. FOD 3.4.464 fixes the pool
+  lifecycle and missing-count handling; tests now include the alias table,
+  temporarily remove and restore constraints for malformed-row probes, and
+  check that dropping a repository closes its cached PostgreSQL sessions. The
+  full 66-test `pg_query` suite passed serially against a fresh disposable
+  schema on the verified 32KiB build. Broader PostgreSQL fault-injection and
+  malformed-row regressions remain pending.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

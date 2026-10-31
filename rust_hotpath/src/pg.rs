@@ -4591,6 +4591,24 @@ struct SharedConnectionPool {
     control_transaction_gate: Arc<TransactionAdmissionGate>,
 }
 
+impl Drop for SharedConnectionPool {
+    fn drop(&mut self) {
+        let state = self
+            .state
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cached_connections = std::mem::take(&mut state.cached_conn)
+            .into_iter()
+            .chain(std::mem::take(&mut state.control_cached_conn));
+        for cached in cached_connections {
+            let conn = cached.conn as *mut PGconn;
+            if !conn.is_null() {
+                unsafe { PQfinish(conn) };
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CurrentTransactionContext {
     pool: Arc<SharedConnectionPool>,
@@ -6495,16 +6513,14 @@ impl DbRepo {
             let params = [&data_object_id];
             let res =
                 exec_prepared_params(conn, PreparedStatement::DataObjectReferenceCount, &params)?;
-            let text = fetch_single_text(res)?;
-            if text.is_empty() {
-                Ok(None)
-            } else {
-                let value = text
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| "invalid reference_count value".to_string())?;
-                Ok(Some(value))
-            }
+            let Some(text) = fetch_single_optional_text(res)? else {
+                return Ok(None);
+            };
+            let value = text
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid reference_count value".to_string())?;
+            Ok(Some(value))
         }
     }
 
