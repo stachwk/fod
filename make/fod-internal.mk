@@ -1514,6 +1514,10 @@ test-copy-file-range: init
 test-copy-file-range-multimount-ownership: build-runtime venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range_multimount_ownership.py
 
+.PHONY: test-copy-file-range-source-fencing
+test-copy-file-range-source-fencing: build-runtime venv
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range_source_fencing.py
+
 .PHONY: test-copy-file-range-stale-multimount
 test-copy-file-range-stale-multimount: build-runtime venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range_stale_multimount.py
@@ -2066,7 +2070,7 @@ test-mount-suite: venv
 
 test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
 test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke test-forget-open-unlink-full
-test-integration: test-runtime-profile test-dual-host-same-file-cp-race test-create-write-ownership test-rename-write-ownership test-rename-symlink-transactional test-rename-directory-transactional test-stale-writer-fencing
+test-integration: test-runtime-profile test-dual-host-same-file-cp-race test-create-write-ownership test-copy-file-range-source-fencing test-rename-write-ownership test-rename-symlink-transactional test-rename-directory-transactional test-stale-writer-fencing
 
 benchmark: benchmarks
 

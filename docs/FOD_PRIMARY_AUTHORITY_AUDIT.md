@@ -5,8 +5,8 @@ Document role: topic review/specification supporting the
 summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
-Date: 2026-10-25. Updated: 2026-10-31. Reviewed base: FOD 3.4.394
-(`2afd192`). Scope: Rust FUSE runtime and its PostgreSQL repository. The
+Date: 2026-10-25. Updated: 2026-10-31. Reviewed base: FOD 3.4.396
+(`53e6b87`). Scope: Rust FUSE runtime and its PostgreSQL repository. The
 historical unlink data-loss case below is repaired and its mounted regression
 was verified on 2026-10-26. Later increments addressed specific stale or
 replica-routed mutation inputs, authorization checks and inode/path bindings;
@@ -633,5 +633,32 @@ old descriptor and verifies `F_GETLK` on the replacement reports `F_UNLCK`.
 It passed on FOD 3.4.368 against a fresh schema-32 database inside a private
 mount namespace.
 
-These items are source-review findings and test gaps; do not describe them as
-additional reproduced data-loss cases.
+### Whole-object copy source-write serialization
+
+`adopt_source_data_object_optional_fence()` modifies the destination inode to
+share the source's data object. Before this fix, the transaction serialized
+only against destination writers. A source block writer could make its
+copy-on-write decision under `fod:write:file:<source-id>` while adoption
+incremented the shared object's reference count without taking that lock. This
+left an interleaving where the source writer could update the newly shared
+object, changing the destination after the copy.
+
+FOD 3.4.397 takes both source and destination write advisory locks in sorted
+resource-key order inside the adoption transaction, then re-reads object metadata
+and validates the destination fencing lease before mutating. Stable ordering
+avoids reciprocal-copy deadlocks; the lock is transaction-scoped and serializes
+with ordinary fenced writes and legacy writes that reject active leases.
+`tests/integration/test_copy_file_range_source_fencing.py` provides a
+two-mount regression: it holds the source write key, requires the copy to block
+on that exact PostgreSQL backend lock, releases it, then writes the source and
+checks that the destination retains the original object and bytes. The test is
+registered as `make test-copy-file-range-source-fencing` and in
+`make test-integration`.
+
+The C9 regression passed on FOD 3.4.397 in `release-lto` against disposable
+PostgreSQL 16.15 on Linux 6.17.0-41-generic/libfuse3 3.17.4. Existing C7
+destination-ownership and C8 stale-fencing regressions passed against the same
+database afterward. The disposable database was removed. No pre-fix
+byte-corruption reproduction was recorded; the source-level race mechanism is
+supported by the transactions and the regression confirms the corrected
+serialization and copy-on-write isolation.

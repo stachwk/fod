@@ -14,6 +14,29 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Whole-object `copy_file_range` adoption did not serialize with source writes.**
+  `adopt_source_data_object_optional_fence()` validated and locked the
+  destination lease but read the source object and incremented its reference
+  count without taking the source inode's `fod:write:file:<id>` advisory lock.
+  FOD block writers use that key to serialize their reference-count/COW
+  decision. A source write could therefore decide the data object was unique
+  before adoption committed, then modify it after the destination began
+  sharing it. The Rust transaction now acquires source and destination write
+  locks in sorted resource-key order before re-reading metadata and validating the
+  destination fence. Regression `test_copy_file_range_source_fencing.py`
+  blocks the source key, requires adoption to wait on that PostgreSQL lock, then
+  modifies the source and checks the destination retained the original bytes
+  and data object. Root cause confidence: high from the shared advisory-lock
+  paths and transaction code. Impact: a concurrent source write could alter a
+  copied destination. The mounted regression passed on FOD 3.4.397 in
+  `release-lto` against disposable PostgreSQL 16.15 on Linux
+  6.17.0-41-generic/libfuse3 3.17.4. The existing C7 destination ownership and
+  C8 stale-fencing regressions passed on the same stack and database. The test
+  database was removed after the run. No pre-fix byte-corruption reproduction
+  was recorded; the race was identified from the transaction/lock paths, and
+  the regression verifies source-lock serialization plus post-copy COW
+  isolation. See [primary-authority audit](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md).
+
 - [x] **Callback FUSE `access(X_OK)` używał bitu wykonywania z opóźnionej repliki.**
   Callback `FodFuse::access` pobierał początkowe atrybuty przez zwykły read
   routing, a następnie stosował wyjątek Linuxa wymagający co najmniej jednego

@@ -14145,6 +14145,8 @@ impl DbRepo {
         write_fence: Option<WritePersistenceFence>,
     ) -> Result<bool, String> {
         let dst_file_id_for_fence = dst_file_id;
+        let src_file_id_for_write_lock = src_file_id;
+        let dst_file_id_for_write_lock = dst_file_id;
         let sql_file_info =
             CString::new("SELECT size, data_object_id FROM files WHERE id_file = $1")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -14259,8 +14261,29 @@ impl DbRepo {
                     Ok(None)
                 },
                 |conn| {
-                    // Copy-on-write adoption modifies the destination file.
-                    // The ownership check and mutation share the transaction.
+                    // Adoption changes the destination's data-object pointer,
+                    // so serialize it with writes to both inodes. Locking the
+                    // source is essential: otherwise a source write could see
+                    // reference_count=1, then mutate the object after we share
+                    // it with the destination. Sort the resource keys the same
+                    // way as other multi-resource ownership transactions so
+                    // reciprocal cross-mount copies cannot deadlock.
+                    let mut write_resource_keys = vec![
+                        format!("fod:write:file:{src_file_id_for_write_lock}"),
+                        format!("fod:write:file:{dst_file_id_for_write_lock}"),
+                    ];
+                    write_resource_keys.sort_unstable();
+                    write_resource_keys.dedup();
+                    for resource_key in write_resource_keys {
+                        let resource_key = CString::new(resource_key).map_err(|_| {
+                            "write fence advisory resource contains NUL byte".to_string()
+                        })?;
+                        Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+                    }
+
+                    // The destination ownership check and mutation share this
+                    // transaction. Its advisory lock above is transaction-scoped
+                    // and reentrant, so the validator reuses the same lock.
                     if let Some(fence) = write_fence {
                         self.validate_write_persistence_fence_on_conn(
                             conn,
