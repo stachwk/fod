@@ -852,7 +852,14 @@ Reading guide:
   check that dropping a repository closes its cached PostgreSQL sessions. The
   full 66-test `pg_query` suite passed serially against a fresh disposable
   schema on the verified 32KiB build. Broader PostgreSQL fault-injection and
-  malformed-row regressions remain pending.
+  malformed-row regressions remain pending. FOD 3.4.465 also makes the shared
+  optional namespace decoders reject multiple rows and unexpected column
+  counts. `resolve_path` now fetches two candidates so it can detect rather
+  than hide cross-table namespace collisions. The new
+  `duplicate_symlink_namespace_rows_are_rejected` regression first reproduced
+  the defect, then passed for both direct symlink lookup and `resolve_path`;
+  the full 67-test `pg_query` suite passed on the verified disposable 32KiB
+  database.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

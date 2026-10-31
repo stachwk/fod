@@ -1157,6 +1157,56 @@ fn rename_replace_rejects_missing_target_data_object() -> Result<(), String> {
 }
 
 #[test]
+fn duplicate_symlink_namespace_rows_are_rejected() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("duplicate_symlink_namespace");
+    let symlink_id = repo.create_symlink(
+        None,
+        &name,
+        "target",
+        1000,
+        1000,
+        &unique_name("duplicate_symlink_namespace_seed"),
+    )?;
+
+    let result = (|| {
+        repo.exec(&format!(
+            "INSERT INTO symlink_hardlinks (id_symlink, id_parent, name) \
+             VALUES ({symlink_id}, NULL, '{}')",
+            name
+        ))?;
+        let path = format!("/{name}");
+        let symlink_error = repo
+            .get_symlink_id(&path)
+            .err()
+            .ok_or_else(|| "symlink lookup accepted duplicate namespace rows".to_string())?;
+        if !symlink_error.contains("2 rows") {
+            return Err(format!(
+                "unexpected duplicate symlink lookup error: {symlink_error}"
+            ));
+        }
+        let path_error = repo
+            .resolve_path(&path)
+            .err()
+            .ok_or_else(|| "path resolution accepted duplicate namespace rows".to_string())?;
+        if !path_error.contains("2 rows") {
+            return Err(format!(
+                "unexpected duplicate path lookup error: {path_error}"
+            ));
+        }
+        Ok(())
+    })();
+
+    let cleanup_alias = repo.exec(&format!(
+        "DELETE FROM symlink_hardlinks WHERE id_symlink = {symlink_id} AND name = '{}'",
+        name
+    ));
+    let cleanup_symlink = repo.delete_symlink_entry(symlink_id);
+    result.and(cleanup_alias).and(cleanup_symlink)
+}
+
+#[test]
 fn symlink_null_target_is_not_reported_as_missing_or_empty() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

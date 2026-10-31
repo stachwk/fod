@@ -2275,7 +2275,7 @@ impl PreparedStatement {
                     WHERE d.name = $1 AND d.id_parent IS NULL
                 ) entries
                 ORDER BY precedence
-                LIMIT 1
+                LIMIT 2
                 "
             }
             PreparedStatement::ResolvePathNested => {
@@ -2302,7 +2302,7 @@ impl PreparedStatement {
                     WHERE d.name = $1 AND d.id_parent = $2
                 ) entries
                 ORDER BY precedence
-                LIMIT 1
+                LIMIT 2
                 "
             }
             PreparedStatement::FetchPathAttrsBlobFile => {

@@ -39,11 +39,20 @@ unsafe fn parse_optional_namespace_id(
     res: *mut super::PGresult,
     description: &str,
 ) -> Result<Option<u64>, String> {
-    if PQntuples(res) < 1 {
+    let rows = PQntuples(res);
+    let cols = PQnfields(res);
+    if cols != 1 {
+        return Err(format!(
+            "{description} returned an invalid result: expected 1 column, got {cols}"
+        ));
+    }
+    if rows == 0 {
         return Ok(None);
     }
-    if PQnfields(res) < 1 {
-        return Err(format!("{description} row is missing its id column"));
+    if rows != 1 {
+        return Err(format!(
+            "{description} returned an invalid result: expected at most 1 row, got {rows} rows"
+        ));
     }
     if PQgetisnull(res, 0, 0) != 0 {
         return Err(format!("{description} returned a NULL id"));
@@ -66,11 +75,20 @@ unsafe fn parse_optional_namespace_id(
 unsafe fn parse_optional_resolved_entry(
     res: *mut super::PGresult,
 ) -> Result<Option<(String, u64)>, String> {
-    if PQntuples(res) < 1 {
+    let rows = PQntuples(res);
+    let cols = PQnfields(res);
+    if cols != 2 {
+        return Err(format!(
+            "path lookup returned an invalid result: expected 2 columns, got {cols}"
+        ));
+    }
+    if rows == 0 {
         return Ok(None);
     }
-    if PQnfields(res) < 2 {
-        return Err("path lookup row is missing fields".to_string());
+    if rows != 1 {
+        return Err(format!(
+            "path lookup returned an invalid result: expected at most 1 row, got {rows} rows"
+        ));
     }
     if PQgetisnull(res, 0, 0) != 0 || PQgetisnull(res, 0, 1) != 0 {
         return Err("path lookup returned a NULL kind or id".to_string());
