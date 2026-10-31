@@ -1006,3 +1006,12 @@ results are malformed; it can no longer interpret an unknown value as absence
 of an active lease and proceed with deletion. Catalog snapshot schema checks
 also reject unexpected result cardinality. All 36 indexer tests pass without
 connecting to PostgreSQL.
+FOD 3.4.497 hardens `mkfs` scalar-boolean queries to require one non-NULL
+result cell and a recognized boolean value; this includes schema-existence and
+upgrade checks plus the schema-upgrade advisory lock. FUSE runtime-override
+table discovery now fails on malformed boolean output instead of treating the
+table as absent. The hotpath parser test and `mkfs` unit targets pass. The
+content-generation integration tests stopped at their dedicated-database-name
+guard (`foddbname`) without connecting. The FUSE crate could not be compiled
+because the installed libfuse3 is 3.14.0 and the project requires 3.18.2 or
+newer; no compilation claim is made for that crate.

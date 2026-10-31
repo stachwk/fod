@@ -2461,3 +2461,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   `EXISTS` output in cleanup could be treated as “no active handles” and permit
   deletion. Malformed row cardinality in the snapshot schema check now reports
   a database-result error. All 36 indexer tests pass; no database was used.
+
+## FOD 3.4.497 — validate scalar PostgreSQL booleans in mkfs and FUSE
+
+- [x] Make `mkfs` boolean queries require exactly one non-NULL cell and accept
+  only recognized PostgreSQL boolean values. The schema-upgrade advisory lock
+  now uses this strict query path. FUSE runtime-override table discovery also
+  rejects malformed boolean text instead of silently acting as if the table is
+  absent. The hotpath boolean test and all `mkfs` unit-test targets pass. The
+  `mkfs` content-generation integration tests refused the shared database name
+  `foddbname` before making a connection. FUSE compilation remains unverified:
+  this host has libfuse3 3.14.0 but FOD requires at least 3.18.2.

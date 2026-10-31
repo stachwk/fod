@@ -26,7 +26,7 @@ use libc::{POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
-    prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
+    parse_postgres_bool, prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
     DirectoryEntryMetadata, DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome,
     FileWriteAuthorization, GeneratedSharedBlockRows, InodePermissionChange,
     InodePermissionOutcome, InodeTimeValue, InodeTimesChange, InodeTimesOutcome, PersistBlockRow,
@@ -1110,10 +1110,7 @@ fn runtime_override_snapshot(repo: &DbRepo) -> Result<HashMap<String, String>, S
         "SELECT to_regclass('{}.runtime_overrides') IS NOT NULL",
         FOD_SCHEMA_NAME
     ))?;
-    if !matches!(
-        table_exists.trim().to_ascii_lowercase().as_str(),
-        "t" | "true" | "1" | "on"
-    ) {
+    if !parse_postgres_bool(&table_exists, "runtime override table existence")? {
         return Ok(HashMap::new());
     }
     let payload = repo.query_scalar_text(&format!(

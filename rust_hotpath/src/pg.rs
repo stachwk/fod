@@ -1997,7 +1997,7 @@ unsafe fn probe_connection_target(
     })
 }
 
-fn parse_postgres_bool(value: &str, description: &str) -> Result<bool, String> {
+pub fn parse_postgres_bool(value: &str, description: &str) -> Result<bool, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "t" | "true" | "1" | "on" => Ok(true),
         "f" | "false" | "0" | "off" => Ok(false),

@@ -38,6 +38,7 @@ unsafe extern "C" {
     fn PQresultStatus(res: *const PGresult) -> c_int;
     fn PQntuples(res: *const PGresult) -> c_int;
     fn PQnfields(res: *const PGresult) -> c_int;
+    fn PQgetisnull(res: *const PGresult, row_number: c_int, field_number: c_int) -> c_int;
     fn PQgetvalue(res: *const PGresult, row_number: c_int, field_number: c_int) -> *const c_char;
     fn PQclear(res: *mut PGresult);
     fn PQfinish(conn: *mut PGconn);
@@ -260,11 +261,37 @@ impl DbConn {
 
     #[allow(dead_code)]
     pub fn query_scalar_bool(&self, sql: &str) -> Result<bool, String> {
-        let value = self.query_scalar_text(sql)?;
-        Ok(matches!(
-            value.as_deref(),
-            Some("t") | Some("true") | Some("1") | Some("on")
-        ))
+        let sql = CString::new(sql).map_err(|_| "SQL text contains NUL byte".to_string())?;
+        unsafe {
+            let res = PQexec(self.conn, sql.as_ptr());
+            if res.is_null() {
+                return Err(conn_error(self.conn));
+            }
+            let value = match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let rows = PQntuples(res);
+                    let cols = PQnfields(res);
+                    if rows != 1 || cols != 1 {
+                        Err(format!(
+                            "PostgreSQL boolean query returned {rows} rows and {cols} columns; expected one row and one column"
+                        ))
+                    } else if PQgetisnull(res, 0, 0) != 0 {
+                        Err("PostgreSQL boolean query returned NULL".to_string())
+                    } else {
+                        let value = PQgetvalue(res, 0, 0);
+                        if value.is_null() {
+                            Err("PostgreSQL boolean query returned a null value pointer"
+                                .to_string())
+                        } else {
+                            parse_postgres_bool_text(&CStr::from_ptr(value).to_string_lossy())
+                        }
+                    }
+                }
+                _ => Err(conn_error(self.conn)),
+            };
+            PQclear(res);
+            value
+        }
     }
 
     #[allow(dead_code)]
@@ -290,6 +317,28 @@ impl DbConn {
             }
             Some(_) => Ok(None),
             None => Ok(None),
+        }
+    }
+}
+
+fn parse_postgres_bool_text(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "t" | "true" | "1" | "on" => Ok(true),
+        "f" | "false" | "0" | "off" => Ok(false),
+        _ => Err(format!("invalid PostgreSQL boolean value `{value}`")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_postgres_bool_text;
+
+    #[test]
+    fn postgres_boolean_decoder_rejects_unknown_values() {
+        assert_eq!(parse_postgres_bool_text(" t "), Ok(true));
+        assert_eq!(parse_postgres_bool_text("OFF"), Ok(false));
+        for value in ["", "unknown", "null", "2"] {
+            assert!(parse_postgres_bool_text(value).is_err());
         }
     }
 }

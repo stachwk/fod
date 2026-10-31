@@ -894,15 +894,7 @@ fn ensure_fod_privileges(conn: &DbConn, db_user: &str) -> Result<(), String> {
 }
 
 fn acquire_schema_upgrade_lock(conn: &DbConn) -> Result<(), String> {
-    let acquired = conn
-        .query_scalar_text("SELECT pg_try_advisory_lock(1180124246)::text")?
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "t" | "true" | "1"
-            )
-        })
-        .unwrap_or(false);
+    let acquired = conn.query_scalar_bool("SELECT pg_try_advisory_lock(1180124246)")?;
     if acquired {
         Ok(())
     } else {
