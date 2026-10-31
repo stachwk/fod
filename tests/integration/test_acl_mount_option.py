@@ -776,6 +776,34 @@ def main() -> None:
                     inherited_default_acl,
                 )
 
+                no_default_acl_dir = mountpoint / f"umask-without-default-acl-{suffix}"
+                no_default_acl_dir.mkdir(mode=0o777)
+                try:
+                    os.getxattr(no_default_acl_dir, "system.posix_acl_default")
+                except OSError as error:
+                    assert error.errno == errno.ENODATA, error
+                else:
+                    raise AssertionError("test directory unexpectedly has a default ACL")
+
+                plain_file = no_default_acl_dir / "umask-file"
+                plain_child_dir = no_default_acl_dir / "umask-directory"
+                plain_fifo = no_default_acl_dir / "umask-fifo"
+                previous_umask = os.umask(0o077)
+                try:
+                    fd = os.open(
+                        plain_file,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o666,
+                    )
+                    os.close(fd)
+                    plain_child_dir.mkdir(mode=0o777)
+                    os.mkfifo(plain_fifo, mode=0o666)
+                finally:
+                    os.umask(previous_umask)
+                assert stat.S_IMODE(plain_file.stat().st_mode) == 0o600
+                assert stat.S_IMODE(plain_child_dir.stat().st_mode) == 0o700
+                assert stat.S_IMODE(plain_fifo.stat().st_mode) == 0o600
+
                 filtered_file = inheritance_dir / "filtered-file"
                 fd = os.open(
                     filtered_file,
@@ -862,6 +890,7 @@ def main() -> None:
                     "acl_denied_truncate_errno=EACCES "
                     "default_acl_mode_filter=1 default_acl_ignores_umask=1 "
                     "nested_directory_inheritance=1 "
+                    "umask_without_default_acl=1 "
                     "parent_namespace_create_unlink_rmdir_rename=EACCES"
                 )
             finally:

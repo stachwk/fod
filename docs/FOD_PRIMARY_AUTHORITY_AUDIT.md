@@ -424,7 +424,8 @@ Under a default ACL, FOD filters that requested mode; without one it applies
 umask in the same PostgreSQL transaction that reads the parent. The regression
 exercises capability negotiation, named-user/group-class entries, the
 ignored-umask case, child directories retaining the unfiltered default ACL,
-and mode-filtered nested files.
+mode-filtered nested files, and umask application to files, directories and
+FIFOs when a parent has no default ACL.
 `make test-xattr` and `make test-ioctl` also pass on the mounted filesystem;
 the xattr test uses its documented compatibility fallback for namespaces that
 the host denies. `FIONREAD` is exercised through FUSE. `FICLONE` returns the

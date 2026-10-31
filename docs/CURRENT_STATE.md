@@ -23,8 +23,9 @@ mounts negotiate `FUSE_DONT_MASK` with `FUSE_POSIX_ACL`, because Linux otherwise
 applies umask before the FOD callback. A parent default ACL filters the original
 requested creation mode; without one, FOD applies umask inside the primary
 transaction. Mounted coverage checks capability negotiation, ACL filtering,
-directory inheritance and nested files. P07 remains open for other POSIX
-permission and identity requirements.
+directory inheritance, nested files, and umask application for files,
+directories and FIFOs when no default ACL exists. P07 remains open for other
+POSIX permission and identity requirements.
 
 ## Runtime architecture
 

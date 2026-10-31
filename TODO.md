@@ -1935,3 +1935,12 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   [Linux FUSE create](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/dir.c),
   [POSIX ACL create filtering](https://github.com/torvalds/linux/blob/v6.17/fs/posix_acl.c#L2921-L3019).
 - [ ] P07 remains Pending for the rest of the permission and identity matrix.
+
+## FOD 3.4.436 — check umask without a default ACL
+
+- [x] Extend the mounted ACL regression to cover the other `FUSE_DONT_MASK`
+  path: when a parent has no default ACL, FOD must apply the request umask
+  itself. Under umask `077`, regular-file creation, `mkdir()` and `mkfifo()`
+  must yield modes `0600`, `0700` and `0600`. The test confirms the parent has
+  no default ACL before these operations. Validation runs against Linux
+  6.17.0-41-generic, libfuse3 3.18.2 and an isolated PostgreSQL database.
