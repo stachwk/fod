@@ -32,6 +32,14 @@ pub struct IndexedFile {
     pub source_changed: bool,
 }
 
+pub(crate) fn parse_postgres_bool(value: &str, label: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "t" | "true" | "1" | "on" => Ok(true),
+        "f" | "false" | "0" | "off" => Ok(false),
+        _ => Err(format!("invalid PostgreSQL boolean for {label}: `{value}`")),
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct FileHash {
@@ -308,13 +316,6 @@ fn parse_optional_i64(value: &str) -> Result<Option<i64>, String> {
     parse_i64(value).map(Some)
 }
 
-fn parse_bool(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "t" | "true" | "1" | "on"
-    )
-}
-
 fn row_value<'a>(row: &'a [String], index: usize, label: &str) -> Result<&'a str, String> {
     row.get(index)
         .map(|value| value.as_str())
@@ -378,7 +379,10 @@ impl IndexedFile {
             device: parse_optional_u64(row_value(row, 8, "indexed file")?)?,
             file_kind: row_value(row, 9, "indexed file")?.to_string(),
             scan_status: row_value(row, 10, "indexed file")?.to_string(),
-            source_changed: parse_bool(row_value(row, 11, "indexed file")?),
+            source_changed: parse_postgres_bool(
+                row_value(row, 11, "indexed file source_changed")?,
+                "indexed file source_changed",
+            )?,
         })
     }
 
@@ -434,7 +438,16 @@ impl DuplicateSet {
 
 #[cfg(test)]
 mod tests {
-    use super::{require_exact_row_columns, require_single_exact_row};
+    use super::{parse_postgres_bool, require_exact_row_columns, require_single_exact_row};
+
+    #[test]
+    fn postgres_boolean_decoder_rejects_unknown_values() {
+        assert_eq!(parse_postgres_bool(" t ", "test"), Ok(true));
+        assert_eq!(parse_postgres_bool("OFF", "test"), Ok(false));
+        for value in ["", "unknown", "null", "2"] {
+            assert!(parse_postgres_bool(value, "test").is_err());
+        }
+    }
 
     #[test]
     fn exact_row_column_validator_rejects_short_and_extra_rows() {

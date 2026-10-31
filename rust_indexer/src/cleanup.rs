@@ -1,5 +1,7 @@
 use crate::db::sql_quote_literal;
-use crate::model::{require_exact_row_columns, require_single_exact_row, CleanupFailedSummary};
+use crate::model::{
+    parse_postgres_bool, require_exact_row_columns, require_single_exact_row, CleanupFailedSummary,
+};
 use fod_rust_hotpath::pg::{DbRepo, DbRepoTransaction};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -159,7 +161,7 @@ fn reject_cleanup_during_active_write_lease(
             "SELECT pg_try_advisory_xact_lock(hashtextextended({}, 0))",
             DbRepo::quote_literal(&resource_key)
         ))?;
-        if !matches!(locked.trim().to_ascii_lowercase().as_str(), "t" | "true") {
+        if !parse_postgres_bool(&locked, "index cleanup advisory-lock result")? {
             return Err(format!(
                 "FOD_INDEXER_CLEANUP_ACTIVE_WRITER advisory_busy resource={resource_key}"
             ));
@@ -184,10 +186,7 @@ fn reject_cleanup_during_active_write_lease(
               AND s.lease_expires_at > clock_timestamp()
         )::text"
     ))?;
-    if matches!(
-        open_handles.trim().to_ascii_lowercase().as_str(),
-        "t" | "true"
-    ) {
+    if parse_postgres_bool(&open_handles, "index cleanup active open-handle state")? {
         return Err("FOD_INDEXER_CLEANUP_ACTIVE_OPEN_HANDLE active_open_lease".to_string());
     }
 
@@ -204,7 +203,7 @@ fn reject_cleanup_during_active_write_lease(
               AND dwl.lease_expires_at > clock_timestamp()
         )::text"
     ))?;
-    if matches!(active.trim().to_ascii_lowercase().as_str(), "t" | "true") {
+    if parse_postgres_bool(&active, "index cleanup active write-lease state")? {
         return Err("FOD_INDEXER_CLEANUP_ACTIVE_WRITER active_write_lease".to_string());
     }
     Ok(())

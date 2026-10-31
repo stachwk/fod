@@ -2452,3 +2452,12 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   write fencing: malformed lease state must not imply that no lease exists.
   The pure decoder regression, hotpath crate check and formatting pass. These
   checks do not require a PostgreSQL query, so no database was changed.
+
+## FOD 3.4.496 — make indexer PostgreSQL booleans fail closed
+
+- [x] Reuse a strict PostgreSQL boolean decoder for indexer row projections,
+  import-plan state, catalog snapshot creation/schema checks, and cleanup's
+  advisory-lock, open-handle and write-lease checks. Previously, malformed
+  `EXISTS` output in cleanup could be treated as “no active handles” and permit
+  deletion. Malformed row cardinality in the snapshot schema check now reports
+  a database-result error. All 36 indexer tests pass; no database was used.

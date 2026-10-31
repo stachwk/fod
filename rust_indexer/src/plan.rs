@@ -1,8 +1,8 @@
 use crate::db::{ensure_indexer_request_token_schema, sql_quote_literal};
 use crate::hash;
 use crate::model::{
-    require_exact_row_columns, require_single_exact_row, DuplicateSet, ImportPlanSummary,
-    IndexedFile,
+    parse_postgres_bool, require_exact_row_columns, require_single_exact_row, DuplicateSet,
+    ImportPlanSummary, IndexedFile,
 };
 use crate::output::{
     DuplicateReportSnapshot, DuplicateSetMemberView, DuplicateSetSnapshot, ImportPlanEntryView,
@@ -182,13 +182,6 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
     let snapshot = load_duplicate_report_snapshot(repo, limit)?;
     println!("{}", snapshot.human_readable());
     Ok(())
-}
-
-fn parse_bool(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "t" | "true" | "1" | "on"
-    )
 }
 
 fn duplicate_set_member_from_row(row: &[String]) -> Result<DuplicateSetMemberView, String> {
@@ -526,7 +519,7 @@ pub(crate) fn load_import_plan_snapshot(
                         .map_err(|err| format!("invalid plan entry mtime: {err}"))?,
                 )
             },
-            source_changed: parse_bool(&row[14]),
+            source_changed: parse_postgres_bool(&row[14], "import plan source_changed")?,
         });
     }
 
@@ -534,7 +527,7 @@ pub(crate) fn load_import_plan_snapshot(
         summary,
         status: plan_row[3].clone(),
         request_token: plan_row[4].clone(),
-        dry_run: parse_bool(&plan_row[5]),
+        dry_run: parse_postgres_bool(&plan_row[5], "import plan dry_run")?,
         created_at: plan_row[1].clone(),
         updated_at: plan_row[2].clone(),
         entries,

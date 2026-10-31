@@ -1,6 +1,6 @@
 use crate::duplicate_set_api;
 use crate::hash;
-use crate::model::{require_exact_row_columns, require_single_exact_row};
+use crate::model::{parse_postgres_bool, require_exact_row_columns, require_single_exact_row};
 use crate::output::IndexerCapabilitiesOutput;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -506,7 +506,7 @@ fn file_read_record_from_row(row: &[String]) -> Result<FileReadRecord, String> {
         device: parse_optional_u64(&row[9], "file device")?,
         file_kind: row[10].clone(),
         scan_status: row[11].clone(),
-        source_changed: parse_bool(&row[12]),
+        source_changed: parse_postgres_bool(&row[12], "file-read source_changed")?,
         hash_algorithm: optional_text(&row[13]),
         partial_hash_hex: optional_text(&row[14]),
         full_hash_hex: optional_text(&row[15]),
@@ -549,13 +549,6 @@ fn parse_optional_i64(value: &str, label: &str) -> Result<Option<i64>, String> {
             .map(Some)
             .map_err(|err| format!("invalid {label}: {err}"))
     }
-}
-
-fn parse_bool(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "t" | "true" | "1" | "on"
-    )
 }
 
 #[cfg(test)]

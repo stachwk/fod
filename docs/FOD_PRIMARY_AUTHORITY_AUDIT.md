@@ -1000,3 +1000,9 @@ fail-open path where malformed active-lease state could allow deferred unlink
 to purge an inode or allow a write to proceed without a lease. The pure decoder
 test and hotpath compile pass; these checks require no database, so no claim of
 new PostgreSQL integration coverage is made.
+FOD 3.4.496 extends strict PostgreSQL boolean decoding to the indexer. In
+particular, cleanup now aborts if advisory-lock, open-handle, or write-lease
+results are malformed; it can no longer interpret an unknown value as absence
+of an active lease and proceed with deletion. Catalog snapshot schema checks
+also reject unexpected result cardinality. All 36 indexer tests pass without
+connecting to PostgreSQL.

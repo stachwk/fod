@@ -1,6 +1,6 @@
 use crate::db::sql_quote_literal;
 use crate::file_read_api;
-use crate::model::{require_exact_row_columns, require_single_exact_row};
+use crate::model::{parse_postgres_bool, require_exact_row_columns, require_single_exact_row};
 use crate::output::{
     CommandCapabilityView, IndexerCapabilitiesOutput, INDEXER_DEFAULT_PAGE_LIMIT,
     INDEXER_MAX_PAGE_LIMIT,
@@ -374,7 +374,7 @@ pub fn create_catalog_snapshot(
     ))?;
     let row = require_single_exact_row(&rows, 9, "catalog snapshot create")?;
     let snapshot = snapshot_from_row(&row[..7])?;
-    let created_new = parse_bool(&row[7]);
+    let created_new = parse_postgres_bool(&row[7], "catalog snapshot created_new")?;
     let copied_count = parse_u64(&row[8], "copied snapshot file count")?;
     if created_new && copied_count != snapshot.file_count {
         return Err(format!(
@@ -559,9 +559,19 @@ fn ensure_snapshot_schema(repo: &DbRepo, operation: &str) -> Result<(), String> 
     let ready = match rows.as_slice() {
         [row] => {
             require_exact_row_columns(row, 3, "catalog snapshot schema check")?;
-            parse_bool(&row[0]) && parse_bool(&row[1]) && parse_bool(&row[2])
+            let snapshots_ready = parse_postgres_bool(&row[0], "catalog snapshot table readiness")?;
+            let files_ready =
+                parse_postgres_bool(&row[1], "catalog snapshot file table readiness")?;
+            let request_tokens_ready =
+                parse_postgres_bool(&row[2], "catalog snapshot request-token readiness")?;
+            snapshots_ready && files_ready && request_tokens_ready
         }
-        _ => false,
+        _ => {
+            return Err(format!(
+                "catalog snapshot schema check returned {} rows, expected one",
+                rows.len()
+            ));
+        }
     };
     if ready {
         Ok(())
@@ -637,13 +647,6 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
         .trim()
         .parse::<u64>()
         .map_err(|err| format!("invalid {label}: {err}"))
-}
-
-fn parse_bool(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "t" | "true" | "1" | "on"
-    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1034,7 +1037,7 @@ fn snapshot_file_item_from_row(row: &[String]) -> Result<crate::read_api::FileCa
         device: parse_optional_u64(&row[9], "file device")?,
         file_kind: row[10].clone(),
         scan_status: row[11].clone(),
-        source_changed: parse_bool(&row[12]),
+        source_changed: parse_postgres_bool(&row[12], "snapshot file source_changed")?,
         hash_algorithm: optional_text(&row[13]),
         full_hash_hex: optional_text(&row[14]),
         hash_status: optional_text(&row[15]),
