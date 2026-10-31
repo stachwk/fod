@@ -918,6 +918,16 @@ Reading guide:
   fod-rust-hotpath -- --test-threads=1` passed against a newly initialized
   disposable PostgreSQL 16.15 database; the custom build configuration and
   live `SHOW block_size=32768` were checked, and the database was dropped.
+  Source review found a remaining decoder-contract question: the generic
+  `fetch_first_row_texts()`, `fetch_rows_text()` and
+  `fetch_first_column_texts()` helpers convert SQL `NULL` fields to empty
+  strings, while `fetch_first_row_texts()` also discards rows after the first.
+  Several consumers validate those values or query primary-key-backed rows,
+  and some fields are intentionally nullable, so this alone does not establish
+  a filesystem defect. Audit the remaining callers, distinguish legitimate
+  nullability from malformed results, and add targeted fault-injection
+  regressions before tightening the shared helpers. No runtime misbehavior has
+  been reproduced for this finding.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a
