@@ -54,10 +54,11 @@ Reading guide:
   conformance evidence. Removed the assertion from the gating mounted test and
   reclassified it in the POSIX audit as an implementation-specific diagnostic.
   The regular `closedir()` success path remains covered. The corrected
-  `test_readdir_snapshot_multimount.py` passed on FOD 3.4.398 against isolated
-  PostgreSQL 16.15 on Linux 6.17.0-41-generic/libfuse3 3.17.4, also exercising
-  mounted `open()`/`opendir()` `EMFILE`. POSIX source: `dirfd()`; root cause
-  confidence: high.
+  `test_readdir_snapshot_multimount.py` passed on FOD 3.4.398 and was rerun on
+  FOD 3.4.411 in `release-lto` against a disposable PostgreSQL 16.15 database
+  on Linux 6.17.0-41-generic/libfuse3 3.17.4. Both runs exercised mounted
+  `open()`/`opendir()` `EMFILE`; the disposable database was dropped. POSIX
+  source: `dirfd()`; root cause confidence: high.
 
 - [x] **Whole-object `copy_file_range` adoption did not serialize with source writes.**
   `adopt_source_data_object_optional_fence()` validated and locked the
@@ -799,11 +800,12 @@ Reading guide:
   direct libc `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT`
   from `opendir()` for a missing path, plus `EMFILE` for `opendir()` and `open()`
   after exhausting the process descriptor limit. The mounted
-  `test_readdir_snapshot_multimount.py` regression passed on FOD 3.4.398 against
-  an isolated PostgreSQL 16.15 database on Linux 6.17/libfuse3 3.17.4. A former
-  assertion required `closedir()` to return `EBADF` after external closure of
-  `dirfd()`; it was removed because POSIX defines that use as undefined behavior
-  (see the resolved finding above). System-wide `ENFILE` and remaining
+  `test_readdir_snapshot_multimount.py` regression passed on FOD 3.4.398 and was
+  rerun on FOD 3.4.411 in `release-lto` against a disposable PostgreSQL 16.15
+  database on Linux 6.17.0-41-generic/libfuse3 3.17.4; that database was
+  dropped. A former assertion required `closedir()` to return `EBADF` after
+  external closure of `dirfd()`; it was removed because POSIX defines that use
+  as undefined behavior (see the resolved finding above). System-wide `ENFILE` and remaining
   namespace errno checks are unverified on supported 64-bit-and-wider systems;
   do not build a 32-bit FOD target for the narrow-inode `EOVERFLOW` case.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
