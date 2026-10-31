@@ -33,6 +33,9 @@ use crate::ll::flags::fattr_flags::FattrFlags;
 
 pub(crate) const FUSE_KERNEL_VERSION: u32 = 7;
 
+pub(crate) const FUSE_OPEN_KILL_SUIDGID: u32 = 1 << 0;
+pub(crate) const FUSE_SETXATTR_ACL_KILL_SGID: u32 = 1 << 0;
+
 pub(crate) const FUSE_KERNEL_MINOR_VERSION: u32 = if cfg!(target_os = "macos") {
     // macfuse headers declared the latest version as 19.
     // In theory, it is supposed to quietly handle a newer version, but
@@ -349,7 +352,7 @@ pub(crate) struct fuse_open_in {
     // NOTE: this field is defined as u32 in fuse_kernel.h in libfuse. However, it is then cast
     // to an i32 when invoking the filesystem's open method and this matches the open() syscall
     pub(crate) flags: i32,
-    pub(crate) unused: u32,
+    pub(crate) open_flags: u32,
 }
 
 #[repr(C)]
@@ -360,7 +363,7 @@ pub(crate) struct fuse_create_in {
     pub(crate) flags: i32,
     pub(crate) mode: u32,
     pub(crate) umask: u32,
-    pub(crate) padding: u32,
+    pub(crate) open_flags: u32,
 }
 
 #[repr(C)]
@@ -456,6 +459,14 @@ pub(crate) struct fuse_setxattr_in {
     #[cfg(target_os = "macos")]
     pub(crate) position: u32,
     #[cfg(target_os = "macos")]
+    pub(crate) padding: u32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Debug, FromBytes, KnownLayout, Immutable)]
+pub(crate) struct fuse_setxattr_ext {
+    pub(crate) setxattr_flags: u32,
     pub(crate) padding: u32,
 }
 

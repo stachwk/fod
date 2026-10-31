@@ -531,8 +531,49 @@ impl DbRepo {
             tx.exec(&format!(
                 "UPDATE {table} SET uid={new_uid}, gid={new_gid}{mode_update}, change_date=NOW(), modification_date=NOW() WHERE {key}={id}"
             ))?;
+            if kind == "file" && (change.uid.is_some() || change.gid.is_some()) {
+                tx.exec(&format!(
+                    "DELETE FROM xattrs WHERE owner_kind='file' AND owner_id={id} AND name='security.capability'"
+                ))?;
+            }
             Ok(InodePermissionOutcome::Changed)
         })
+    }
+
+    /// Clear Linux privilege metadata while a content mutation holds the
+    /// authoritative file row lock and persistence fence.
+    pub(super) unsafe fn clear_file_privileges_on_conn(
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<(), String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let select_mode = CString::new("SELECT mode FROM files WHERE id_file=$1 FOR UPDATE")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let Some(row) = fetch_first_row_texts(exec_params(conn, &select_mode, &[&file_id])?)?
+            .first()
+            .cloned()
+        else {
+            return Err("file missing while clearing privilege metadata".to_string());
+        };
+        let current_mode = parse_persisted_posix_mode(&row)?;
+        let mut mode = current_mode & !0o4000;
+        if current_mode & 0o2010 == 0o2010 {
+            mode &= !0o2000;
+        }
+        let mode =
+            CString::new(format!("{mode:o}")).map_err(|_| "mode contains NUL byte".to_string())?;
+        let update_mode = CString::new(
+            "UPDATE files SET mode=$1, change_date=clock_timestamp() WHERE id_file=$2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        exec_command_params(conn, &update_mode, &[&mode, &file_id])?;
+
+        let delete_capability = CString::new(
+            "DELETE FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='security.capability'",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        exec_command_params(conn, &delete_capability, &[&file_id])
     }
 
     pub fn touch_file_entry(&self, file_id: u64) -> Result<(), String> {

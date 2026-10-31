@@ -139,6 +139,10 @@ def main() -> int:
         assert "ATOMIC_O_TRUNC" in requested
         assert "ATOMIC_O_TRUNC" in enabled
         assert "ATOMIC_O_TRUNC" not in unsupported
+        assert "HANDLE_KILLPRIV_V2" in requested
+        assert "HANDLE_KILLPRIV_V2" in enabled
+        assert "SETXATTR_EXT" in requested
+        assert "SETXATTR_EXT" in enabled
 
         assert compatibility["requested_max_write_bytes"] == 1_048_576
         assert compatibility["effective_max_write_bytes"] > 0

@@ -17,7 +17,9 @@ const FUSE_MAX_PAGES_LIMIT_PATH: &str = "/proc/sys/fs/fuse/max_pages_limit";
 const FUSE_MAX_READAHEAD_ENV: &str = "FOD_FUSE_MAX_READAHEAD_BYTES";
 const FOD_BASE_REQUESTED_CAPABILITIES: InitFlags = InitFlags::FUSE_POSIX_LOCKS
     .union(InitFlags::FUSE_FLOCK_LOCKS)
-    .union(InitFlags::FUSE_ATOMIC_O_TRUNC);
+    .union(InitFlags::FUSE_ATOMIC_O_TRUNC)
+    .union(InitFlags::FUSE_HANDLE_KILLPRIV_V2)
+    .union(InitFlags::FUSE_SETXATTR_EXT);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FuseCompatibilitySnapshot {
@@ -334,7 +336,10 @@ mod tests {
         assert_eq!(snapshot.enabled_capabilities, InitFlags::FUSE_POSIX_LOCKS);
         assert_eq!(
             snapshot.unsupported_capabilities,
-            InitFlags::FUSE_FLOCK_LOCKS | InitFlags::FUSE_ATOMIC_O_TRUNC
+            InitFlags::FUSE_FLOCK_LOCKS
+                | InitFlags::FUSE_ATOMIC_O_TRUNC
+                | InitFlags::FUSE_HANDLE_KILLPRIV_V2
+                | InitFlags::FUSE_SETXATTR_EXT
         );
         assert_eq!(snapshot.requested_max_write, 512 * 1024);
         assert_eq!(snapshot.effective_max_write, 512 * 1024);
@@ -359,6 +364,12 @@ mod tests {
         assert!(telemetry
             .requested_capabilities
             .contains(&"ATOMIC_O_TRUNC".to_string()));
+        assert!(telemetry
+            .requested_capabilities
+            .contains(&"HANDLE_KILLPRIV_V2".to_string()));
+        assert!(telemetry
+            .requested_capabilities
+            .contains(&"SETXATTR_EXT".to_string()));
         assert_eq!(telemetry.requested_max_write_bytes, 512 * 1024);
         assert_eq!(telemetry.effective_max_readahead_bytes, 256 * 1024);
         assert_eq!(telemetry.max_background, None);

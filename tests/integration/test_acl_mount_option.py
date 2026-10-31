@@ -563,6 +563,52 @@ def main() -> None:
                 assert os.access(file_path, os.W_OK)
                 assert not os.access(file_path, os.X_OK)
 
+                nobody = pwd.getpwnam("nobody")
+                nobody_group = grp.getgrgid(nobody.pw_gid)
+                kill_sgid_acl_path = mountpoint / f"acl-kill-sgid-{suffix}.txt"
+                kill_sgid_acl_path.write_bytes(b"setgid ACL payload\n")
+                subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "chown",
+                        f"{nobody.pw_uid}:0",
+                        str(kill_sgid_acl_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                subprocess.run(
+                    ["sudo", "-n", "chmod", "2755", str(kill_sgid_acl_path)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                assert kill_sgid_acl_path.stat().st_mode & 0o2000
+                if can_run_as_nobody():
+                    set_acl_as_owner = subprocess.run(
+                        [
+                            "sudo",
+                            "-n",
+                            "-u",
+                            "nobody",
+                            sys.executable,
+                            "-c",
+                            "import os,sys; os.setxattr(sys.argv[1], 'system.posix_acl_access', bytes.fromhex(sys.argv[2]))",
+                            str(kill_sgid_acl_path),
+                            allow_acl.hex(),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    assert set_acl_as_owner.returncode == 0, set_acl_as_owner.stderr
+                    assert stat.S_IMODE(kill_sgid_acl_path.stat().st_mode) == 0o600
+                    assert kill_sgid_acl_path.stat().st_mode & 0o2000 == 0
+                else:
+                    print("SKIP acl-kill-sgid (sudo cannot run commands as nobody)")
+
                 chmod_acl_path = mountpoint / f"acl-chmod-{suffix}.txt"
                 chmod_acl_path.write_bytes(b"chmod ACL payload\n")
                 nobody_uid = pwd.getpwnam("nobody").pw_uid

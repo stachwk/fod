@@ -507,12 +507,16 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_eq!(guard_note.as_deref(), Some("guard"));
 
     let version = conn
-        .query_scalar_u64("SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64(
+            "SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
     let minimum_client_version = conn
-        .query_scalar_text("SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_text(
+            "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )
         .expect("minimum client version query")
         .expect("minimum client version row");
     assert_eq!(minimum_client_version, env!("CARGO_PKG_VERSION"));
@@ -626,7 +630,9 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_eq!(guard_note.as_deref(), Some("guard"));
 
     let version = conn
-        .query_scalar_u64("SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64(
+            "SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
@@ -777,7 +783,9 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert!(table_exists(&conn, "fod", "schema_admin").expect("schema_admin exists"));
     assert!(table_exists(&conn, "fod", "lock_range_leases").expect("lock_range_leases exists"));
     let version = conn
-        .query_scalar_u64("SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64(
+            "SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
@@ -965,7 +973,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
     );
     let gate_after_active_session_rejection = conn
         .query_scalar_bool(
-            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1",
         )
         .expect("read gate after active session rejection");
     assert!(!gate_after_active_session_rejection);
@@ -1037,7 +1045,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
     );
     let upgrade_in_progress = conn
         .query_scalar_bool(
-            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1",
         )
         .expect("read recovered schema upgrade state");
     assert!(
@@ -1260,7 +1268,9 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade.stdout));
 
     let version = conn
-        .query_scalar_u64("SELECT schema_number FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64(
+            "SELECT schema_number FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1",
+        )
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);

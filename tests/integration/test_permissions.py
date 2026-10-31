@@ -50,6 +50,67 @@ else:
     )
 
 
+def _run_as_nobody(script: str, path: Path, *args: str) -> None:
+    result = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", sys.executable, "-c", script, str(path), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "unprivileged operation failed",
+        path,
+        result.returncode,
+        result.stderr,
+    )
+
+
+def _append_as_nobody(path: Path, payload: bytes) -> None:
+    script = """
+import os
+import sys
+
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND)
+try:
+    os.write(fd, bytes.fromhex(sys.argv[2]))
+finally:
+    os.close(fd)
+"""
+    _run_as_nobody(script, path, payload.hex())
+
+
+def _assert_capability_removal_denied_as_nobody(path: Path) -> None:
+    script = """
+import errno
+import os
+import sys
+
+try:
+    os.removexattr(sys.argv[1], "security.capability")
+except OSError as error:
+    if error.errno != errno.EPERM:
+        raise
+else:
+    raise AssertionError("unprivileged removexattr unexpectedly succeeded")
+"""
+    _run_as_nobody(script, path)
+
+
+def _truncate_as_nobody(path: Path, size: int) -> None:
+    _run_as_nobody(
+        "import os, sys; os.truncate(sys.argv[1], int(sys.argv[2]))",
+        path,
+        str(size),
+    )
+
+
+def _open_truncate_as_nobody(path: Path) -> None:
+    _run_as_nobody(
+        "import os, sys; fd=os.open(sys.argv[1], os.O_WRONLY | os.O_TRUNC); os.close(fd)",
+        path,
+    )
+
+
 def _chgrp(path: Path, gid: int, *, follow_symlinks: bool = True) -> None:
     try:
         os.chown(path, -1, gid, follow_symlinks=follow_symlinks)
@@ -87,6 +148,13 @@ def main() -> None:
 
             suid_dir = mountpoint / f"suid-{suffix}"
             suid_file = suid_dir / "suid.txt"
+            suid_write_file = suid_dir / "suid-write.txt"
+            suid_truncate_file = suid_dir / "suid-truncate.txt"
+            suid_open_truncate_file = suid_dir / "suid-open-truncate.txt"
+            sgid_no_group_execute_file = suid_dir / "sgid-no-group-execute.txt"
+            capability_write_file = suid_dir / "capability-write.txt"
+            capability_truncate_file = suid_dir / "capability-truncate.txt"
+            capability_open_truncate_file = suid_dir / "capability-open-truncate.txt"
             suid_link = suid_dir / "suid-link"
             group_file = suid_dir / "group.txt"
             group_dir = suid_dir / "groupdir"
@@ -117,25 +185,85 @@ def main() -> None:
             before = suid_file.stat().st_mode
             assert before & 0o6000 == 0o6000, oct(before)
 
+            for path in (suid_write_file, suid_truncate_file, suid_open_truncate_file):
+                path.write_bytes(b"privileged-payload\n")
+                os.chmod(path, 0o6757)
+                assert path.stat().st_mode & 0o6000 == 0o6000, oct(path.stat().st_mode)
+
+            sgid_no_group_execute_file.write_bytes(b"sgid-without-group-execute\n")
+            os.chmod(sgid_no_group_execute_file, 0o6626)
+            _append_as_nobody(sgid_no_group_execute_file, b"append\n")
+            sgid_mode = sgid_no_group_execute_file.stat().st_mode
+            assert sgid_mode & 0o4000 == 0, oct(sgid_mode)
+            assert sgid_mode & 0o2000, oct(sgid_mode)
+            assert sgid_no_group_execute_file.read_bytes().endswith(b"append\n")
+
+            append_payload = b"unprivileged-append\n"
+            _append_as_nobody(suid_write_file, append_payload)
+            assert suid_write_file.read_bytes().endswith(append_payload)
+            assert suid_write_file.stat().st_mode & 0o6000 == 0
+
+            _truncate_as_nobody(suid_truncate_file, 8)
+            assert suid_truncate_file.read_bytes() == b"privileg"
+            assert suid_truncate_file.stat().st_mode & 0o6000 == 0
+
+            _open_truncate_as_nobody(suid_open_truncate_file)
+            assert suid_open_truncate_file.read_bytes() == b""
+            assert suid_open_truncate_file.stat().st_mode & 0o6000 == 0
+
             setcap = shutil.which("setcap")
             capability_xattr_installed = False
             if setcap is None:
                 print("SKIP security.capability chown regression: setcap is unavailable")
             else:
-                setcap_result = subprocess.run(
-                    ["sudo", "-n", setcap, "cap_net_bind_service=ep", str(suid_file)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                assert setcap_result.returncode == 0, (
-                    "setcap failed before chown regression",
-                    setcap_result.returncode,
-                    setcap_result.stderr,
-                )
+                capability_write_file.write_bytes(b"capability-write\n")
+                capability_truncate_file.write_bytes(b"capability-truncate\n")
+                capability_open_truncate_file.write_bytes(b"capability-open-truncate\n")
+                os.chmod(capability_write_file, 0o666)
+                os.chmod(capability_truncate_file, 0o666)
+                os.chmod(capability_open_truncate_file, 0o666)
+                for path in (
+                    suid_file,
+                    capability_write_file,
+                    capability_truncate_file,
+                    capability_open_truncate_file,
+                ):
+                    setcap_result = subprocess.run(
+                        ["sudo", "-n", setcap, "cap_net_bind_service=ep", str(path)],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    assert setcap_result.returncode == 0, (
+                        "setcap failed before privilege-removal regression",
+                        path,
+                        setcap_result.returncode,
+                        setcap_result.stderr,
+                    )
+                _assert_capability_removal_denied_as_nobody(capability_write_file)
                 capability_value = os.getxattr(suid_file, "security.capability")
                 assert capability_value, "setcap installed an empty security.capability xattr"
                 capability_xattr_installed = True
+
+                _append_as_nobody(capability_write_file, b"append\n")
+                _truncate_as_nobody(capability_truncate_file, 8)
+                _open_truncate_as_nobody(capability_open_truncate_file)
+                for path in (
+                    capability_write_file,
+                    capability_truncate_file,
+                    capability_open_truncate_file,
+                ):
+                    try:
+                        os.getxattr(path, "security.capability")
+                    except OSError as error:
+                        assert error.errno == errno.ENODATA, error
+                    else:
+                        raise AssertionError(
+                            f"write/truncate preserved security.capability on {path}"
+                        )
+                assert capability_write_file.read_bytes().endswith(b"append\n")
+                assert capability_truncate_file.read_bytes() == b"capabili"
+                assert capability_open_truncate_file.read_bytes() == b""
 
             _chgrp(suid_file, alt_gid)
             after = suid_file.stat().st_mode
@@ -224,13 +352,23 @@ def main() -> None:
                 pass
 
             suid_link.unlink()
+            capability_truncate_file.unlink(missing_ok=True)
+            capability_write_file.unlink(missing_ok=True)
+            capability_open_truncate_file.unlink(missing_ok=True)
+            sgid_no_group_execute_file.unlink()
+            suid_open_truncate_file.unlink()
+            suid_truncate_file.unlink()
+            suid_write_file.unlink()
             suid_file.unlink()
             group_file.unlink()
             group_dir.rmdir()
             suid_subdir.rmdir()
             suid_dir.rmdir()
 
-            print("OK permissions/sticky/chown")
+            print("OK permissions/sticky/chown/write-killpriv/truncate-killpriv/open-killpriv")
+        except Exception:
+            launcher._dump_log()
+            raise
         finally:
             launcher.stop()
 

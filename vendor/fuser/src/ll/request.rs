@@ -235,6 +235,7 @@ fn validate_off_t(name: &'static str, value: u64) -> Result<(), Errno> {
 }
 
 mod op {
+    use super::abi;
     use std::cmp;
     use std::convert::TryInto;
     use std::ffi::OsStr;
@@ -358,6 +359,9 @@ mod op {
             } else {
                 None
             }
+        }
+        pub(crate) fn kill_suidgid(&self) -> bool {
+            self.valid().contains(FattrFlags::FATTR_KILL_SUIDGID)
         }
         pub(crate) fn uid(&self) -> Option<u32> {
             if self.valid().contains(FattrFlags::FATTR_UID) {
@@ -665,6 +669,9 @@ mod op {
         pub(crate) fn flags(&self) -> OpenFlags {
             OpenFlags(self.arg.flags)
         }
+        pub(crate) fn kill_suidgid(&self) -> bool {
+            self.arg.open_flags & abi::FUSE_OPEN_KILL_SUIDGID != 0
+        }
     }
 
     /// Read data.
@@ -834,6 +841,7 @@ mod op {
         arg: &'a fuse_setxattr_in,
         name: &'a OsStr,
         value: &'a [u8],
+        kill_sgid: bool,
     }
     impl<'a> SetXAttr<'a> {
         pub(crate) fn name(&self) -> &'a OsStr {
@@ -846,6 +854,9 @@ mod op {
         pub(crate) fn flags(&self) -> i32 {
             self.arg.flags
         }
+        pub(crate) fn kill_sgid(&self) -> bool {
+            self.kill_sgid
+        }
         /// This will always be 0 except on `MacOS`.  It's recommended that
         /// implementations return EINVAL if this is not 0.
         pub(crate) fn position(&self) -> u32 {
@@ -854,6 +865,15 @@ mod op {
             #[cfg(not(target_os = "macos"))]
             0
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn extended_setxattr_flags(data: &[u8]) -> Option<u32> {
+        if data.len() < 8 || data[4..8] != [0, 0, 0, 0] {
+            return None;
+        }
+        let flags = u32::from_ne_bytes(data[..4].try_into().ok()?);
+        (flags & !abi::FUSE_SETXATTR_ACL_KILL_SGID == 0).then_some(flags)
     }
 
     /// Get an extended attribute.
@@ -1254,6 +1274,9 @@ mod op {
         }
         pub(crate) fn umask(&self) -> u32 {
             self.arg.umask
+        }
+        pub(crate) fn kill_suidgid(&self) -> bool {
+            self.arg.open_flags & 1 != 0
         }
     }
 
@@ -1717,11 +1740,26 @@ mod op {
                 arg: data.fetch()?,
             }),
             fuse_opcode::FUSE_SETXATTR => Operation::SetXAttr({
+                let arg = data.fetch()?;
+                #[cfg(target_os = "linux")]
+                let kill_sgid = {
+                    if let Some(setxattr_flags) =
+                        extended_setxattr_flags(data.remaining())
+                    {
+                        let _: &crate::ll::fuse_abi::fuse_setxattr_ext = data.fetch()?;
+                        setxattr_flags & abi::FUSE_SETXATTR_ACL_KILL_SGID != 0
+                    } else {
+                        false
+                    }
+                };
+                #[cfg(not(target_os = "linux"))]
+                let kill_sgid = false;
                 let out = SetXAttr {
                     header,
-                    arg: data.fetch()?,
+                    arg,
                     name: data.fetch_str()?,
                     value: data.fetch_all(),
+                    kill_sgid,
                 };
                 assert!(out.value.len() == out.arg.size as usize);
                 out
@@ -2221,6 +2259,26 @@ mod tests {
 
     use crate::ll::request::*;
     use crate::ll::test::AlignedData;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn setxattr_extension_detection_distinguishes_legacy_names() {
+        let mut extended = 1u32.to_ne_bytes().to_vec();
+        extended.extend_from_slice(&[0; 4]);
+        assert_eq!(op::extended_setxattr_flags(&extended), Some(1));
+
+        let mut unflagged = 0u32.to_ne_bytes().to_vec();
+        unflagged.extend_from_slice(&[0; 4]);
+        assert_eq!(op::extended_setxattr_flags(&unflagged), Some(0));
+
+        let mut legacy_name = b"user.".to_vec();
+        legacy_name.extend_from_slice(b"x\0value");
+        assert_eq!(op::extended_setxattr_flags(&legacy_name), None);
+
+        let mut unknown_flags = 2u32.to_ne_bytes().to_vec();
+        unknown_flags.extend_from_slice(&[0; 4]);
+        assert_eq!(op::extended_setxattr_flags(&unknown_flags), None);
+    }
 
     #[cfg(target_endian = "big")]
     const INIT_REQUEST: AlignedData<[u8; 104]> = AlignedData([

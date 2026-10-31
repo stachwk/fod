@@ -9434,9 +9434,10 @@ impl DbRepo {
                     let res = exec_params(conn, &conflict_sql, &conflict_params)?;
                     let conflict = fetch_single_text(res)?;
                     if !conflict.trim().is_empty() {
-                        let other_type = conflict.trim().parse::<i32>().map_err(|err| {
-                            format!("invalid active flock lease type: {err}")
-                        })?;
+                        let other_type = conflict
+                            .trim()
+                            .parse::<i32>()
+                            .map_err(|err| format!("invalid active flock lease type: {err}"))?;
                         if !matches!(other_type, 1 | 2) {
                             return Err(format!(
                                 "unsupported active flock lease type: {other_type}"
@@ -10683,9 +10684,7 @@ impl DbRepo {
             .map_err(|_| "invalid data_object_id value".to_string())?;
         let reference_count = self
             .data_object_reference_count_on_conn(conn, data_object_id)?
-            .ok_or_else(|| {
-                format!("missing data-object reference count for {data_object_id}")
-            })?;
+            .ok_or_else(|| format!("missing data-object reference count for {data_object_id}"))?;
         let data_object_id_param = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
 
@@ -10742,8 +10741,16 @@ impl DbRepo {
         supplementary_groups: &[u32],
     ) -> Result<RenameFileReplaceOutcome, String> {
         self.rename_namespace_replace_with_ownership_guard_for_subject_acl(
-            source, old_parent_id, old_name, new_parent_id, new_name, expected_target,
-            actor_uid, actor_gid, supplementary_groups, false,
+            source,
+            old_parent_id,
+            old_name,
+            new_parent_id,
+            new_name,
+            expected_target,
+            actor_uid,
+            actor_gid,
+            supplementary_groups,
+            false,
         )
     }
 
@@ -10762,8 +10769,15 @@ impl DbRepo {
         use_posix_acl: bool,
     ) -> Result<RenameFileReplaceOutcome, String> {
         self.rename_namespace_replace_with_ownership_guard_internal(
-            source, old_parent_id, old_name, new_parent_id, new_name, expected_target,
-            actor_uid, false, Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
+            source,
+            old_parent_id,
+            old_name,
+            new_parent_id,
+            new_name,
+            expected_target,
+            actor_uid,
+            false,
+            Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
         )
     }
 
@@ -11121,7 +11135,8 @@ impl DbRepo {
                         }
                     }
 
-                    if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor {
+                    if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor
+                    {
                         let mut parent_ids = vec![old_parent_id, new_parent_id];
                         parent_ids.sort_unstable();
                         parent_ids.dedup();
@@ -13810,6 +13825,7 @@ impl DbRepo {
             capacity_reservation_token,
             write_fence,
             None,
+            false,
         )
     }
 
@@ -13826,6 +13842,7 @@ impl DbRepo {
         capacity_reservation_token: Option<&str>,
         write_fence: Option<WritePersistenceFence>,
         write_authorization: Option<&FileWriteAuthorization>,
+        kill_suidgid: bool,
     ) -> Result<(), String> {
         let mut payload_guard =
             self.payload_persist_guard(persist_block_input_bytes(blocks), blocks.len() as u64);
@@ -13846,6 +13863,9 @@ impl DbRepo {
                         file_id,
                         authorization,
                     )?;
+                }
+                if kill_suidgid {
+                    DbRepo::clear_file_privileges_on_conn(conn, file_id)?;
                 }
                 if capacity_reservation_token.is_some() {
                     let quota_lock = self.lock_payload_quota_on_conn(conn)?;

@@ -19,6 +19,7 @@ pub(crate) struct WriteState {
     pub(crate) file_id: u64,
     pub(crate) file_size: u64,
     pub(crate) truncate_pending: bool,
+    pub(crate) kill_suidgid: bool,
     pub(crate) buffered_bytes: u64,
     pub(crate) load_error: bool,
     pub(crate) payload: WritePayloadState,
@@ -68,6 +69,7 @@ impl FodFuse {
             file_id,
             file_size,
             truncate_pending,
+            kill_suidgid: false,
             buffered_bytes: 0,
             load_error: false,
             payload: WritePayloadState::default(),
@@ -486,6 +488,7 @@ impl FodFuse {
             block_size,
             total_blocks: execution_plan.total_blocks,
             truncate_pending: state.truncate_pending,
+            kill_suidgid: state.kill_suidgid,
             blocks: &rows,
             maintain_copy_crc_table: live.copy_dedupe_crc_table,
             capacity_reservation_token,
@@ -823,6 +826,7 @@ impl FodFuse {
 
         target.buffered_bytes = target.buffered_bytes.saturating_add(source.buffered_bytes);
         target.load_error |= source.load_error;
+        target.kill_suidgid |= source.kill_suidgid;
 
         for (block_index, block) in source.payload.take_blocks() {
             target.blocks_mut().insert(block_index, block);

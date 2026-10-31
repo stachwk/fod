@@ -17,6 +17,7 @@ bitflags! {
         const FATTR_MTIME_NOW = 1 << 8;
         const FATTR_LOCKOWNER = 1 << 9;
         const FATTR_CTIME = 1 << 10;
+        const FATTR_KILL_SUIDGID = 1 << 11;
         #[cfg(target_os = "macos")]
         const FATTR_CRTIME = 1 << 28;
         #[cfg(target_os = "macos")]

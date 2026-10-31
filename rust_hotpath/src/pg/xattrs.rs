@@ -5,13 +5,13 @@
 //! Keep path resolution here; connection routing and SQL execution stay in `pg`.
 
 use super::{
-    DbRepo, PGRES_TUPLES_OK, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples,
-    PQresultStatus, exec_command_params, exec_params, fetch_first_row_texts,
-    is_retryable_connection_error, parse_persisted_posix_mode, replayable_sql_error, result_error,
-    sql_is_replayable_command,
+    exec_command_params, exec_params, fetch_first_row_texts, is_retryable_connection_error,
+    parse_persisted_posix_mode, replayable_sql_error, result_error, sql_is_replayable_command,
+    DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
+    PGRES_TUPLES_OK,
 };
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use std::ffi::CString;
 
 pub(super) struct InheritedPosixAcl {
@@ -550,7 +550,13 @@ impl DbRepo {
         })
     }
 
-    /// Remove an xattr only after authorizing against the locked inode row.
+    /// Remove an xattr after authorization against the locked inode row.
+    /// Linux VFS also sends REMOVEXATTR for `security.capability` as an
+    /// internal write/truncate side effect (`cap_inode_killpriv()` uses
+    /// `__vfs_removexattr()`), with the writer's fsuid. That operation is
+    /// intentionally allowed here because it can only discard privileges;
+    /// explicit unprivileged removexattr syscalls are rejected in the kernel
+    /// before they reach FUSE.
     pub fn remove_xattr_for_owner_as(
         &self,
         owner_kind: &str,
@@ -580,16 +586,18 @@ impl DbRepo {
             if row.is_empty() {
                 return Err("FOD_XATTR_OWNER_MISSING".to_string());
             }
-            authorize_xattr_mutation_on_conn(
-                tx.conn,
-                owner_kind.to_str().map_err(|err| err.to_string())?,
-                owner_id_value,
-                name.to_str().map_err(|err| err.to_string())?,
-                actor_uid,
-                actor_gid,
-                actor_groups,
-                use_posix_acl,
-            )?;
+            if name.to_bytes() != b"security.capability" {
+                authorize_xattr_mutation_on_conn(
+                    tx.conn,
+                    owner_kind.to_str().map_err(|err| err.to_string())?,
+                    owner_id_value,
+                    name.to_str().map_err(|err| err.to_string())?,
+                    actor_uid,
+                    actor_gid,
+                    actor_groups,
+                    use_posix_acl,
+                )?;
+            }
             let result = exec_params(tx.conn, &delete, &[&owner_kind, &owner_id, &name])?;
             if PQresultStatus(result) != PGRES_TUPLES_OK {
                 let error = result_error(result);
@@ -614,6 +622,31 @@ impl DbRepo {
         create_only: bool,
         replace_only: bool,
         actor_uid: u32,
+    ) -> Result<(), String> {
+        self.store_posix_acl_for_owner_with_kill_sgid(
+            owner_kind,
+            owner_id,
+            name,
+            value,
+            permission_bits,
+            create_only,
+            replace_only,
+            actor_uid,
+            false,
+        )
+    }
+
+    pub fn store_posix_acl_for_owner_with_kill_sgid(
+        &self,
+        owner_kind: &str,
+        owner_id: u64,
+        name: &str,
+        value: &[u8],
+        permission_bits: Option<u16>,
+        create_only: bool,
+        replace_only: bool,
+        actor_uid: u32,
+        kill_sgid: bool,
     ) -> Result<(), String> {
         let (table, key) = match owner_kind {
             "file" => ("files", "id_file"),
@@ -690,8 +723,11 @@ impl DbRepo {
                 &[&owner_kind, &owner_id_param, &name, &value_b64],
             )?;
             if let Some(permission_bits) = permission_bits {
-                let synchronized_mode =
+                let mut synchronized_mode =
                     (current_mode & !0o777) | (u32::from(permission_bits) & 0o777);
+                if kill_sgid {
+                    synchronized_mode &= !0o2000;
+                }
                 let mode_param = CString::new(format!("{synchronized_mode:o}"))
                     .map_err(|_| "mode contains NUL byte".to_string())?;
                 let update_mode = CString::new(format!(

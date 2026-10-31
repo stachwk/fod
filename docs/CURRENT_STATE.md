@@ -516,8 +516,17 @@ The runtime contract is:
 - path-based `truncate()` checks write/search permissions through FOD's mode and POSIX ACL authorization path; mounted tests verify exact `EACCES` for a non-writable file, a non-searchable parent and a denying ACL, while preserving payload and size;
 - writable `open`, `O_TRUNC`, `create` and path-based `truncate`/`setattr`
   participate in the same ownership/fencing contract;
-- writable mounts require `FUSE_ATOMIC_O_TRUNC`; a kernel that cannot negotiate
-  it is rejected rather than exposing an unsafe truncate race.
+- writable mounts require `FUSE_ATOMIC_O_TRUNC`, `FUSE_HANDLE_KILLPRIV_V2` and
+  `FUSE_SETXATTR_EXT`; startup rejects a kernel missing any of these semantics.
+  Write, truncate and `O_TRUNC` pass Linux killpriv flags; the PostgreSQL
+  content transaction clears set-ID bits and any remaining
+  `security.capability`. Linux can first issue an internal
+  `REMOVEXATTR security.capability` before the content request. FOD permits this
+  exact privilege-removal side effect from the writer UID; explicit
+  unprivileged `removexattr()` remains rejected by Linux before FUSE. When this
+  path occurs, attribute removal and content persistence are separate,
+  PostgreSQL-serialized transactions in Linux VFS order. See
+  [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
 All FOD hosts and PostgreSQL nodes should keep system time synchronized with
 `chrony` or an equivalent NTP implementation. Correct lease ordering does not

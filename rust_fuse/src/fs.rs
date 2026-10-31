@@ -1,6 +1,11 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+use crate::errno::{
+    EACCES, EBADF, EBUSY, EDEADLK, EEXIST, EFBIG, EILSEQ, EINTR, EINVAL, EIO, EISDIR, ENAMETOOLONG,
+    ENODATA, ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE,
+    EROFS, ESTALE, EWOULDBLOCK,
+};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
     current_process_rss_bytes, log_logical_task_observability as log_logical_task_snapshots,
@@ -16,11 +21,6 @@ use fuser::{
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
     ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, RequestId, TimeOrNow,
     WriteFlags,
-};
-use crate::errno::{
-    EACCES, EBADF, EBUSY, EDEADLK, EEXIST, EFBIG, EILSEQ, EINTR, EINVAL, EIO, EISDIR,
-    ENAMETOOLONG, ENODATA, ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM,
-    ERANGE, EROFS, ESTALE, EWOULDBLOCK,
 };
 use libc::{POLLIN, POLLOUT};
 use log::{debug, info, warn};
@@ -121,6 +121,7 @@ pub(crate) struct PersistFileBlocksProfileInput<'rows, 'data> {
     pub(crate) block_size: u64,
     pub(crate) total_blocks: u64,
     pub(crate) truncate_pending: bool,
+    pub(crate) kill_suidgid: bool,
     pub(crate) blocks: &'rows [PersistBlockRow<'data>],
     pub(crate) maintain_copy_crc_table: bool,
     pub(crate) capacity_reservation_token: Option<&'rows str>,
@@ -149,10 +150,7 @@ fn fod_fuse_readdir_register_paths_enabled() -> bool {
 }
 
 fn readdir_child_entries_to_skip(offset: u64) -> usize {
-    offset
-        .saturating_sub(2)
-        .try_into()
-        .unwrap_or(usize::MAX)
+    offset.saturating_sub(2).try_into().unwrap_or(usize::MAX)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2267,6 +2265,7 @@ impl FodFuse {
             block_size,
             total_blocks,
             truncate_pending,
+            kill_suidgid,
             blocks,
             maintain_copy_crc_table,
             capacity_reservation_token,
@@ -2287,6 +2286,7 @@ impl FodFuse {
                 capacity_reservation_token,
                 write_fence,
                 write_authorization.as_ref(),
+                kill_suidgid,
             );
         self.record_repo_persist_blocks_elapsed(started.elapsed());
         result
@@ -2557,10 +2557,7 @@ impl FodFuse {
             // in flight. Its EINTR reply has already been sent.
             return;
         };
-        let reply = pending
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .take();
+        let reply = pending.lock().unwrap_or_else(|err| err.into_inner()).take();
         let Some(reply) = reply else {
             return;
         };
@@ -2588,11 +2585,7 @@ impl FodFuse {
         let Some(pending) = pending else {
             return false;
         };
-        if let Some(reply) = pending
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .take()
-        {
+        if let Some(reply) = pending.lock().unwrap_or_else(|err| err.into_inner()).take() {
             fuse_reply_error!(reply, EINTR);
         }
         true
@@ -2804,11 +2797,8 @@ impl FodFuse {
             }
         }
         if let Ok(dt) = DateTime::parse_from_rfc3339(&value.replace(' ', "T")) {
-            return Self::system_time_from_unix_parts(
-                dt.timestamp(),
-                dt.timestamp_subsec_nanos(),
-            )
-            .ok_or(EIO);
+            return Self::system_time_from_unix_parts(dt.timestamp(), dt.timestamp_subsec_nanos())
+                .ok_or(EIO);
         }
         Err(EIO)
     }
@@ -2822,7 +2812,10 @@ impl FodFuse {
         let since_epoch = if nanoseconds == 0 {
             Duration::from_secs(absolute_seconds)
         } else {
-            Duration::new(absolute_seconds.checked_sub(1)?, 1_000_000_000 - nanoseconds)
+            Duration::new(
+                absolute_seconds.checked_sub(1)?,
+                1_000_000_000 - nanoseconds,
+            )
         };
         UNIX_EPOCH.checked_sub(since_epoch)
     }
@@ -3039,16 +3032,9 @@ impl FodFuse {
         let mut idx = 4usize;
         while idx + 8 <= value.len() {
             let tag = u16::from_le_bytes(value[idx..idx + 2].try_into().map_err(|_| EINVAL)?);
-            let perm = u16::from_le_bytes(
-                value[idx + 2..idx + 4]
-                    .try_into()
-                    .map_err(|_| EINVAL)?,
-            );
-            let mut id = i32::from_le_bytes(
-                value[idx + 4..idx + 8]
-                    .try_into()
-                    .map_err(|_| EINVAL)?,
-            );
+            let perm = u16::from_le_bytes(value[idx + 2..idx + 4].try_into().map_err(|_| EINVAL)?);
+            let mut id =
+                i32::from_le_bytes(value[idx + 4..idx + 8].try_into().map_err(|_| EINVAL)?);
             if tag == 0x0001 || tag == 0x0004 || tag == 0x0020 || tag == 0x0010 {
                 id = -1;
             }
@@ -3327,16 +3313,10 @@ impl FodFuse {
         updated
     }
 
-    fn resource_key_for_lock(
-        &self,
-        fh: u64,
-        ino: u64,
-    ) -> Result<(String, String), libc::c_int> {
+    fn resource_key_for_lock(&self, fh: u64, ino: u64) -> Result<(String, String), libc::c_int> {
         let handle = self.file_handle_state_for_handle(fh).ok_or(EBADF)?;
         let file_id = handle.file_id.ok_or(ENOENT)?;
-        let attrs = self
-            .attrs_for_open_file_id(file_id)?
-            .ok_or(ENOENT)?;
+        let attrs = self.attrs_for_open_file_id(file_id)?.ok_or(ENOENT)?;
         if attrs.file_attr.ino.0 != ino {
             return Err(ENOENT);
         }
@@ -3604,7 +3584,6 @@ impl FodFuse {
         self.file_id_for_handle(fh, ino)?.ok_or(ENOENT)
     }
 
-
     fn should_cache_file_read_metadata(
         read_only: bool,
         fopen_direct_io: bool,
@@ -3751,7 +3730,6 @@ impl FodFuse {
         }
     }
 
-
     fn remove_primary_file_or_promote_hardlink(&self, file_id: u64) -> Result<(), String> {
         match self.repo.promote_hardlink_to_primary(file_id) {
             Ok(true) => Ok(()),
@@ -3840,9 +3818,7 @@ impl FodFuse {
         ino: u64,
     ) -> Result<(String, ParsedAttrs), libc::c_int> {
         let path = self.entry_path_for_ino(ino)?;
-        let attrs = self
-            .lookup_path_from_authority(&path)?
-            .ok_or(ENOENT)?;
+        let attrs = self.lookup_path_from_authority(&path)?.ok_or(ENOENT)?;
         if attrs.file_attr.ino.0 != ino {
             return Err(ENOENT);
         }
@@ -4217,10 +4193,7 @@ impl FodFuse {
         self.attrs_for_path(&path)
     }
 
-    fn lookup_path_from_authority(
-        &self,
-        path: &str,
-    ) -> Result<Option<ParsedAttrs>, libc::c_int> {
+    fn lookup_path_from_authority(&self, path: &str) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let path = Self::normalize_path(path);
         if path == "/" {
             return self.root_attr().map(Some);
@@ -4421,10 +4394,7 @@ impl FodFuse {
         }
         let now = Self::current_time();
         let atime = Self::system_time_to_db_string(now);
-        match self
-            .repo
-            .update_directory_access_date(directory_id, &atime)
-        {
+        match self.repo.update_directory_access_date(directory_id, &atime) {
             Ok(()) => Some(now),
             Err(err) => {
                 warn!(
@@ -4531,7 +4501,10 @@ impl FodFuse {
         ) {
             (Ok(atime), Ok(mtime)) => (atime, mtime),
             _ => {
-                warn!("FOD read metadata contains an invalid timestamp file_id={}", file_id);
+                warn!(
+                    "FOD read metadata contains an invalid timestamp file_id={}",
+                    file_id
+                );
                 return;
             }
         };
@@ -5817,6 +5790,15 @@ impl Filesystem for FodFuse {
                 "writable FOD mount requires FUSE_ATOMIC_O_TRUNC for write ownership safety",
             ));
         }
+        if !self.read_only
+            && snapshot
+                .unsupported_capabilities
+                .intersects(InitFlags::FUSE_HANDLE_KILLPRIV_V2 | InitFlags::FUSE_SETXATTR_EXT)
+        {
+            return Err(std::io::Error::other(
+                "writable FOD mount requires FUSE_HANDLE_KILLPRIV_V2 and FUSE_SETXATTR_EXT for Linux privilege-bit semantics",
+            ));
+        }
         let mut compatibility = self
             .fuse_compatibility
             .write()
@@ -6044,13 +6026,13 @@ impl Filesystem for FodFuse {
         let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
         let snapshot_started = metadata_profile_enabled.then(Instant::now);
         let entries = if fod_fuse_readdir_batch_metadata_enabled() {
-            match self
-                .repo
-                .list_directory_entry_metadata_for_id(directory_id)
-            {
+            match self.repo.list_directory_entry_metadata_for_id(directory_id) {
                 Ok(entries) => DirectoryEntrySnapshot::Metadata(entries),
                 Err(err) => {
-                    warn!("FOD opendir metadata snapshot failed path={} err={}", path, err);
+                    warn!(
+                        "FOD opendir metadata snapshot failed path={} err={}",
+                        path, err
+                    );
                     fuse_reply_error!(reply, EIO);
                     return;
                 }
@@ -6208,17 +6190,14 @@ impl Filesystem for FodFuse {
                             return;
                         }
                     };
-                    let inode = match self.stable_inode(
-                        &entry.kind,
-                        &entry.inode_seed,
-                        entry.entry_id,
-                    ) {
-                        Ok(inode) => inode,
-                        Err(errno) => {
-                            fuse_reply_error!(reply, errno);
-                            return;
-                        }
-                    };
+                    let inode =
+                        match self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id) {
+                            Ok(inode) => inode,
+                            Err(errno) => {
+                                fuse_reply_error!(reply, errno);
+                                return;
+                            }
+                        };
                     if fod_fuse_readdir_register_paths_enabled() {
                         let child_path =
                             Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
@@ -6265,17 +6244,14 @@ impl Filesystem for FodFuse {
                             return;
                         }
                     };
-                    let inode = match self.stable_inode(
-                        &entry.kind,
-                        &entry.inode_seed,
-                        entry.entry_id,
-                    ) {
-                        Ok(inode) => inode,
-                        Err(errno) => {
-                            fuse_reply_error!(reply, errno);
-                            return;
-                        }
-                    };
+                    let inode =
+                        match self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id) {
+                            Ok(inode) => inode,
+                            Err(errno) => {
+                                fuse_reply_error!(reply, errno);
+                                return;
+                            }
+                        };
                     if fod_fuse_readdir_register_paths_enabled() {
                         let child_path =
                             Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
@@ -6455,6 +6431,7 @@ impl Filesystem for FodFuse {
         value: &[u8],
         flags: i32,
         position: u32,
+        kill_sgid: bool,
         reply: ReplyEmpty,
     ) {
         let ino = ino.0;
@@ -6514,14 +6491,7 @@ impl Filesystem for FodFuse {
             && ((name == "system.posix_acl_access" && matches!(owner.0.as_str(), "file" | "dir"))
                 || (name == "system.posix_acl_default" && owner.0 == "dir"));
         if name.starts_with("system.posix_acl_") && !posix_acl_transaction {
-            fuse_reply_error!(
-                reply,
-                if self.acl_enabled {
-                    EINVAL
-                } else {
-                    EOPNOTSUPP
-                }
-            );
+            fuse_reply_error!(reply, if self.acl_enabled { EINVAL } else { EOPNOTSUPP });
             return;
         }
         let acl_mode_bits = if posix_acl_transaction {
@@ -6550,7 +6520,7 @@ impl Filesystem for FodFuse {
 
         if posix_acl_transaction {
             let subject = self.request_identity(req);
-            match self.repo.store_posix_acl_for_owner(
+            match self.repo.store_posix_acl_for_owner_with_kill_sgid(
                 &owner.0,
                 owner.1,
                 &name,
@@ -6559,6 +6529,7 @@ impl Filesystem for FodFuse {
                 flags & libc::XATTR_CREATE != 0,
                 flags & libc::XATTR_REPLACE != 0,
                 subject.uid,
+                kill_sgid,
             ) {
                 Ok(()) => {
                     debug!(
@@ -6628,7 +6599,10 @@ impl Filesystem for FodFuse {
             return;
         }
         if name.starts_with("user.") {
-            if !matches!(attrs.file_attr.kind, FileType::RegularFile | FileType::Directory) {
+            if !matches!(
+                attrs.file_attr.kind,
+                FileType::RegularFile | FileType::Directory
+            ) {
                 fuse_reply_error!(reply, ENODATA);
                 return;
             }
@@ -6750,30 +6724,20 @@ impl Filesystem for FodFuse {
                 || (name == "system.posix_acl_access"
                     && !matches!(owner.0.as_str(), "file" | "dir")))
         {
-            fuse_reply_error!(
-                reply,
-                if self.acl_enabled {
-                    EINVAL
-                } else {
-                    EOPNOTSUPP
-                }
-            );
+            fuse_reply_error!(reply, if self.acl_enabled { EINVAL } else { EOPNOTSUPP });
             return;
         }
         debug!("FOD removexattr path={} name={}", path, name);
         let subject = self.request_identity(req);
-        match self
-            .repo
-            .remove_xattr_for_owner_as(
-                &owner.0,
-                owner.1,
-                &name,
-                subject.uid,
-                subject.gid,
-                &subject.groups.iter().copied().collect::<Vec<_>>(),
-                self.acl_enabled,
-            )
-        {
+        match self.repo.remove_xattr_for_owner_as(
+            &owner.0,
+            owner.1,
+            &name,
+            subject.uid,
+            subject.gid,
+            &subject.groups.iter().copied().collect::<Vec<_>>(),
+            self.acl_enabled,
+        ) {
             Ok(deleted) if deleted > 0 => {
                 debug!("FOD removexattr removed path={} name={}", path, name);
                 reply.ok()
@@ -7024,7 +6988,14 @@ impl Filesystem for FodFuse {
         reply.poll(PollEvents::from_bits_retain(revents));
     }
 
-    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        flags: OpenFlags,
+        kill_suidgid: bool,
+        reply: ReplyOpen,
+    ) {
         let ino = ino.0;
         let flags = flags.0;
         let req_id = self.next_request_id();
@@ -7167,6 +7138,7 @@ impl Filesystem for FodFuse {
 
         if writable && (flags & libc::O_TRUNC) != 0 {
             let mut state = Self::new_write_state(file_id, 0, true);
+            state.kill_suidgid = kill_suidgid;
             if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
                 self.rollback_open_handle(fh);
                 self.log_request_error(
@@ -7242,19 +7214,9 @@ impl Filesystem for FodFuse {
             let conflict_end = conflict.end.unwrap_or(i64::MAX as u64);
             debug!(
                 "FOD getlk conflict path={} owner={} conflict_owner={} start={} end={} typ={}",
-                path,
-                owner,
-                conflict.owner,
-                conflict.start,
-                conflict_end,
-                conflict.typ
+                path, owner, conflict.owner, conflict.start, conflict_end, conflict.typ
             );
-            reply.locked(
-                conflict.start,
-                conflict_end,
-                conflict.typ,
-                conflict.pid,
-            );
+            reply.locked(conflict.start, conflict_end, conflict.typ, conflict.pid);
         } else {
             debug!(
                 "FOD getlk unlocked path={} owner={} start={} end={} typ={}",
@@ -7569,9 +7531,7 @@ impl Filesystem for FodFuse {
     ) {
         let fh = fh.0;
         let operation_lock = self.handle_operation_lock(fh);
-        let _operation_guard = operation_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let _operation_guard = operation_lock.lock().unwrap_or_else(|err| err.into_inner());
         let lock_owner = lock_owner.0;
         let _write_profile = self.start_fuse_write_profile();
         if self.file_handle_state_for_handle(fh).is_none() {
@@ -7624,9 +7584,7 @@ impl Filesystem for FodFuse {
     ) {
         let fh = fh.0;
         let operation_lock = self.handle_operation_lock(fh);
-        let _operation_guard = operation_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let _operation_guard = operation_lock.lock().unwrap_or_else(|err| err.into_inner());
         let _write_profile = self.start_fuse_write_profile();
         if self.file_handle_state_for_handle(fh).is_none() {
             fuse_reply_error!(reply, EBADF);
@@ -8022,9 +7980,7 @@ impl Filesystem for FodFuse {
     ) {
         let fh = fh.0;
         let operation_lock = self.handle_operation_lock(fh);
-        let _operation_guard = operation_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let _operation_guard = operation_lock.lock().unwrap_or_else(|err| err.into_inner());
         let lock_owner = lock_owner.map(|owner| owner.0);
         let _write_profile = self.start_fuse_write_profile();
         debug!(
@@ -8084,6 +8040,7 @@ impl Filesystem for FodFuse {
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
         _flags: Option<BsdFileFlags>,
+        kill_suidgid: bool,
         reply: ReplyAttr,
     ) {
         let ino = ino.0;
@@ -8092,9 +8049,9 @@ impl Filesystem for FodFuse {
             .is_some()
             .then(|| fh.map(|fh| self.handle_operation_lock(fh)))
             .flatten();
-        let _operation_guard = operation_lock.as_ref().map(|lock| {
-            lock.lock().unwrap_or_else(|err| err.into_inner())
-        });
+        let _operation_guard = operation_lock
+            .as_ref()
+            .map(|lock| lock.lock().unwrap_or_else(|err| err.into_inner()));
         let subject = self.request_identity(req);
         let _write_profile = size.is_some().then(|| self.start_fuse_write_profile());
         if self.read_only
@@ -8166,7 +8123,11 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            (current_attrs, resolved.kind.unwrap_or_default(), resolved.entry_id)
+            (
+                current_attrs,
+                resolved.kind.unwrap_or_default(),
+                resolved.entry_id,
+            )
         };
         let expected_seed = current_attrs.inode_seed.clone();
         let current_attrs = current_attrs.file_attr;
@@ -8212,6 +8173,7 @@ impl Filesystem for FodFuse {
                 state.file_id = file_id;
                 state.file_size = new_size;
                 state.truncate_pending = true;
+                state.kill_suidgid |= kill_suidgid;
                 if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
                     fuse_reply_error!(reply, errno);
                     return;
@@ -8255,6 +8217,7 @@ impl Filesystem for FodFuse {
                 };
 
                 let mut state = Self::new_write_state(file_id, new_size, true);
+                state.kill_suidgid = kill_suidgid;
                 state.write_authorization = Some(FileWriteAuthorization {
                     actor_uid: subject.uid,
                     actor_groups: subject.groups.iter().copied().collect(),
@@ -9136,18 +9099,19 @@ impl Filesystem for FodFuse {
                             self.acl_enabled,
                         )
                 } else {
-                    self.repo.rename_namespace_replace_with_ownership_guard_for_subject_acl(
-                        source,
-                        old_parent_id,
-                        &old_name,
-                        new_parent_id,
-                        &new_name,
-                        expected_target,
-                        subject.uid,
-                        subject.gid,
-                        &subject.groups.iter().copied().collect::<Vec<_>>(),
-                        self.acl_enabled,
-                    )
+                    self.repo
+                        .rename_namespace_replace_with_ownership_guard_for_subject_acl(
+                            source,
+                            old_parent_id,
+                            &old_name,
+                            new_parent_id,
+                            &new_name,
+                            expected_target,
+                            subject.uid,
+                            subject.gid,
+                            &subject.groups.iter().copied().collect::<Vec<_>>(),
+                            self.acl_enabled,
+                        )
                 };
                 match rename_result {
                     Ok(RenameFileReplaceOutcome::Applied) => {
@@ -9273,6 +9237,7 @@ impl Filesystem for FodFuse {
         mode: u32,
         umask: u32,
         flags: i32,
+        _kill_suidgid: bool,
         reply: ReplyCreate,
     ) {
         let parent = parent.0;
@@ -9460,7 +9425,10 @@ impl Filesystem for FodFuse {
                     req_id,
                     "create",
                     EIO,
-                    format!("path={} phase=post_create_authoritative_lookup_missing", child_path),
+                    format!(
+                        "path={} phase=post_create_authoritative_lookup_missing",
+                        child_path
+                    ),
                 );
                 // Kernel nie dostanie fh po bledzie create(), wiec musimy sami
                 // zwolnic ownership i usunac lokalny stan uchwytu.
@@ -9532,7 +9500,7 @@ impl Filesystem for FodFuse {
         fh: FileHandle,
         offset: u64,
         data: &[u8],
-        _write_flags: WriteFlags,
+        write_flags: WriteFlags,
         _flags: OpenFlags,
         _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
@@ -9549,9 +9517,7 @@ impl Filesystem for FodFuse {
         );
         self.record_write_admission_elapsed(admission_started.elapsed());
         let operation_lock = self.handle_operation_lock(fh);
-        let _operation_guard = operation_lock
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let _operation_guard = operation_lock.lock().unwrap_or_else(|err| err.into_inner());
         let preflight_started = Instant::now();
         if self.read_only {
             self.record_write_preflight_elapsed(preflight_started.elapsed());
@@ -9669,6 +9635,7 @@ impl Filesystem for FodFuse {
             && !has_sibling_states
             && offset <= existing_size
             && end_offset <= existing_size
+            && !write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID)
         {
             let first_block = offset / self.block_size;
             let last_block = (end_offset.saturating_sub(1)) / self.block_size;
@@ -9706,6 +9673,7 @@ impl Filesystem for FodFuse {
         let mut state =
             existing_state.unwrap_or_else(|| Self::new_write_state(file_id, existing_size, false));
         state.file_id = file_id;
+        state.kill_suidgid |= write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID);
         if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
             self.update_write_state(fh, state);
             for (sibling_fh, sibling_state) in sibling_states {
@@ -11072,7 +11040,10 @@ mod tests {
 
     #[test]
     fn degraded_snapshot_returns_estale_when_open_file_disappears() {
-        assert_eq!(assemble_degraded_snapshot(None, 0, 4, 4), Err(crate::errno::ESTALE));
+        assert_eq!(
+            assemble_degraded_snapshot(None, 0, 4, 4),
+            Err(crate::errno::ESTALE)
+        );
     }
 
     #[test]
@@ -11322,6 +11293,7 @@ mod tests {
             file_id: 1,
             file_size: 128,
             truncate_pending: false,
+            kill_suidgid: false,
             buffered_bytes: 0,
             load_error: false,
             payload: WritePayloadState::default(),

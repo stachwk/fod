@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use crate::fs::{FodFuse, FodFuseProfileCounters};
 use crate::errno::EIO;
+use crate::fs::{FodFuse, FodFuseProfileCounters};
 use linked_hash_map::LinkedHashMap;
 use log::warn;
 use rust_hotpath::pg::DbRepo;
@@ -853,7 +853,10 @@ impl FodFuse {
             let initial_stamp = self.file_cache_generations.snapshot(file_id);
             let (cached, missing) =
                 self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
-            if !self.file_cache_generations.is_current(file_id, initial_stamp) {
+            if !self
+                .file_cache_generations
+                .is_current(file_id, initial_stamp)
+            {
                 continue;
             }
             if missing.is_empty() {

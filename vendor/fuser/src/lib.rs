@@ -455,11 +455,13 @@ pub trait Filesystem: Send + Sync + 'static {
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
         flags: Option<BsdFileFlags>,
+        kill_suidgid: bool,
         reply: ReplyAttr,
     ) {
         warn!(
             "[Not Implemented] setattr(ino: {ino:#x?}, mode: {mode:?}, uid: {uid:?}, \
-            gid: {gid:?}, size: {size:?}, fh: {fh:?}, flags: {flags:?})"
+            gid: {gid:?}, size: {size:?}, fh: {fh:?}, flags: {flags:?}, \
+            kill_suidgid: {kill_suidgid})"
         );
         reply.error(Errno::ENOSYS);
     }
@@ -573,7 +575,14 @@ pub trait Filesystem: Send + Sync + 'static {
     /// anything in fh. There are also some flags (`direct_io`, `keep_cache`) which the
     /// filesystem may set, to change the way the file is opened. See `fuse_file_info`
     /// structure in <`fuse_common.h`> for more details.
-    fn open(&self, _req: &Request, _ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+    fn open(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _flags: OpenFlags,
+        _kill_suidgid: bool,
+        reply: ReplyOpen,
+    ) {
         reply.opened(FileHandle(0), FopenFlags::empty());
     }
 
@@ -786,11 +795,12 @@ pub trait Filesystem: Send + Sync + 'static {
         _value: &[u8],
         flags: i32,
         position: u32,
+        kill_sgid: bool,
         reply: ReplyEmpty,
     ) {
         warn!(
             "[Not Implemented] setxattr(ino: {ino:#x?}, name: {name:?}, \
-            flags: {flags:#x?}, position: {position})"
+            flags: {flags:#x?}, position: {position}, kill_sgid: {kill_sgid})"
         );
         reply.error(Errno::ENOSYS);
     }
@@ -846,11 +856,12 @@ pub trait Filesystem: Send + Sync + 'static {
         mode: u32,
         umask: u32,
         flags: i32,
+        kill_suidgid: bool,
         reply: ReplyCreate,
     ) {
         warn!(
             "[Not Implemented] create(parent: {parent:#x?}, name: {name:?}, mode: {mode}, \
-            umask: {umask:#x?}, flags: {flags:#x?})"
+            umask: {umask:#x?}, flags: {flags:#x?}, kill_suidgid: {kill_suidgid})"
         );
         reply.error(Errno::ENOSYS);
     }

@@ -157,6 +157,7 @@ impl<'a> RequestWithSender<'a> {
                     x.chgtime(),
                     x.bkuptime(),
                     x.flags(),
+                    x.kill_suidgid(),
                     self.reply(),
                 );
             }
@@ -234,6 +235,7 @@ impl<'a> RequestWithSender<'a> {
                     self.request_header(),
                     self.request.nodeid(),
                     x.flags(),
+                    x.kill_suidgid(),
                     self.reply(),
                 );
             }
@@ -341,6 +343,7 @@ impl<'a> RequestWithSender<'a> {
                     x.value(),
                     x.flags(),
                     x.position(),
+                    x.kill_sgid(),
                     self.reply(),
                 );
             }
@@ -385,6 +388,7 @@ impl<'a> RequestWithSender<'a> {
                     x.mode(),
                     x.umask(),
                     x.flags(),
+                    x.kill_suidgid(),
                     self.reply(),
                 );
             }

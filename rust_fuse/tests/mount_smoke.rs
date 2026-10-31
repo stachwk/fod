@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use support::{MountedFs, block_size_from_config, unique_suffix};
+use support::{block_size_from_config, unique_suffix, MountedFs};
 
 fn renameat2_with_flags(old: &Path, new: &Path, flags: u32) -> io::Result<()> {
     let old = CString::new(old.as_os_str().as_bytes())
@@ -106,7 +106,7 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         "kernel_protocol=",
         "negotiated_protocol=",
         "available_capabilities=",
-        "fod_requested_capabilities=[POSIX_LOCKS,ATOMIC_O_TRUNC,FLOCK_LOCKS]",
+        "fod_requested_capabilities=[POSIX_LOCKS,ATOMIC_O_TRUNC,FLOCK_LOCKS,HANDLE_KILLPRIV_V2,SETXATTR_EXT]",
         "fod_enabled_capabilities=",
     ] {
         if !compatibility_line.contains(field) {

@@ -89,10 +89,7 @@ mod tests {
 
     #[test]
     fn persisted_write_errors_map_to_linux_errno() {
-        assert_eq!(
-            persist_error_errno(STORAGE_QUOTA_EXCEEDED_PREFIX),
-            ENOSPC
-        );
+        assert_eq!(persist_error_errno(STORAGE_QUOTA_EXCEEDED_PREFIX), ENOSPC);
         assert_eq!(persist_error_errno("SQLSTATE 53100: disk full"), ENOSPC);
         assert_eq!(persist_error_errno(FILE_WRITE_ACCESS_DENIED), EACCES);
         assert_eq!(persist_error_errno(FILE_WRITE_TARGET_MISSING), ENOENT);
@@ -114,18 +111,12 @@ mod tests {
             namespace_mutation_errno(NAMESPACE_ENTRY_EXISTS_PREFIX),
             EEXIST
         );
-        assert_eq!(
-            namespace_mutation_errno(STICKY_PERMISSION_DENIED),
-            EPERM
-        );
+        assert_eq!(namespace_mutation_errno(STICKY_PERMISSION_DENIED), EPERM);
         assert_eq!(
             namespace_mutation_errno(NAMESPACE_PARENT_MISSING_PREFIX),
             ENOENT
         );
-        assert_eq!(
-            namespace_mutation_errno(NAMESPACE_SOURCE_CHANGED),
-            ENOENT
-        );
+        assert_eq!(namespace_mutation_errno(NAMESPACE_SOURCE_CHANGED), ENOENT);
         assert_eq!(namespace_mutation_errno("unclassified"), EIO);
     }
 }

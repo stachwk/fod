@@ -27,6 +27,10 @@ impl<'a> ArgumentIterator<'a> {
         self.data.len()
     }
 
+    pub(crate) fn remaining(&self) -> &'a [u8] {
+        self.data
+    }
+
     /// Fetch a slice of all remaining bytes.
     pub(crate) fn fetch_all(&mut self) -> &'a [u8] {
         let bytes = self.data;

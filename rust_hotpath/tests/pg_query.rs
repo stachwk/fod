@@ -66,10 +66,10 @@ impl TemporaryDatabase {
 
 impl Drop for TemporaryDatabase {
     fn drop(&mut self) {
-        if let Err(err) = self
-            .admin_repo
-            .exec(&format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", self.name))
-        {
+        if let Err(err) = self.admin_repo.exec(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            self.name
+        )) {
             eprintln!("temporary PostgreSQL database cleanup failed: {err}");
         }
     }
@@ -1141,9 +1141,7 @@ fn count_file_links_does_not_report_link_for_missing_file() -> Result<(), String
     }
     match repo.count_file_links(file_id) {
         Err(_) => Ok(()),
-        Ok(links) => Err(format!(
-            "missing file was reported with {links} link(s)"
-        )),
+        Ok(links) => Err(format!("missing file was reported with {links} link(s)")),
     }
 }
 
@@ -1282,14 +1280,15 @@ fn null_file_size_is_not_reported_as_missing_file() -> Result<(), String> {
     let mut not_null_dropped = false;
 
     let result = (|| {
-        if repo.file_size(file_id)? != Some(0)
-            || repo.file_size_authoritative(file_id)? != Some(0)
+        if repo.file_size(file_id)? != Some(0) || repo.file_size_authoritative(file_id)? != Some(0)
         {
             return Err("new file did not report size zero on both read routes".to_string());
         }
         repo.exec("ALTER TABLE files ALTER COLUMN size DROP NOT NULL")?;
         not_null_dropped = true;
-        repo.exec(&format!("UPDATE files SET size = NULL WHERE id_file = {file_id}"))?;
+        repo.exec(&format!(
+            "UPDATE files SET size = NULL WHERE id_file = {file_id}"
+        ))?;
         for (route, result) in [
             ("read", repo.file_size(file_id)),
             ("authoritative", repo.file_size_authoritative(file_id)),
@@ -1309,7 +1308,9 @@ fn null_file_size_is_not_reported_as_missing_file() -> Result<(), String> {
 
     let cleanup = (|| {
         if not_null_dropped {
-            repo.exec(&format!("UPDATE files SET size = 0 WHERE id_file = {file_id}"))?;
+            repo.exec(&format!(
+                "UPDATE files SET size = 0 WHERE id_file = {file_id}"
+            ))?;
             repo.exec("ALTER TABLE files ALTER COLUMN size SET NOT NULL")?;
         }
         repo.purge_primary_file(file_id)
@@ -4357,6 +4358,84 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
     );
     repo.delete_owner_xattrs("dir", directory_id)?;
     repo.delete_directory_entry(directory_id)?;
+    repo.purge_primary_file(file_id)?;
+    Ok(())
+}
+
+#[test]
+fn kernel_killpriv_can_remove_capability_without_owner_authorization() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+
+    repo.store_xattr_value_for_owner(
+        "file",
+        file_id,
+        "security.capability",
+        b"linux-capability-payload",
+    )?;
+    assert_eq!(
+        repo.remove_xattr_for_owner_as(
+            "file",
+            file_id,
+            "security.capability",
+            2001,
+            2001,
+            &[],
+            false,
+        )?,
+        1
+    );
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("file", file_id, "security.capability")?,
+        None
+    );
+
+    repo.store_xattr_value_for_owner("file", file_id, "user.owner-only", b"keep")?;
+    let denied =
+        repo.remove_xattr_for_owner_as("file", file_id, "user.owner-only", 2001, 2001, &[], false);
+    assert!(
+        denied.is_err(),
+        "unrelated xattr removal bypassed ownership"
+    );
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("file", file_id, "user.owner-only")?,
+        Some(b"keep".to_vec())
+    );
+    Ok(())
+}
+
+#[test]
+fn flagged_access_acl_update_clears_sgid_in_same_transaction() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("acl_kill_sgid");
+    let file_id = repo.create_file(
+        None,
+        &name,
+        0o2755,
+        1000,
+        1000,
+        &unique_name("acl_kill_sgid_seed"),
+    )?;
+
+    repo.store_posix_acl_for_owner_with_kill_sgid(
+        "file",
+        file_id,
+        "system.posix_acl_access",
+        b"valid-acl-payload",
+        Some(0o755),
+        false,
+        false,
+        1000,
+        true,
+    )?;
+
+    assert_eq!(
+        repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
+        Some("755")
+    );
     repo.purge_primary_file(file_id)?;
     Ok(())
 }

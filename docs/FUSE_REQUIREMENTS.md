@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.419. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.421. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.419. Zmiana w
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.421. Zmiana w
 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
 nowego zamontowanego przebiegu POSIX.
 
@@ -47,10 +47,21 @@ userspace negocjują wspólną wersję oraz capability; runtime zapisuje do logu
 wersję kernela, wynegocjowaną wersję, dostępne, żądane, włączone i niedostępne
 capability.
 
-FOD prosi m.in. o `POSIX_LOCKS`, `FLOCK_LOCKS` i `ATOMIC_O_TRUNC`. Zapisujący
-mount wymaga wynegocjowanego `ATOMIC_O_TRUNC`; bez niego start jest odrzucany,
-bo bezpieczeństwo własności zapisu opiera się na atomowym zachowaniu
-`O_TRUNC`. Obsługa ACL żąda `POSIX_ACL` tylko wtedy, gdy ACL są włączone.
+FOD prosi m.in. o `POSIX_LOCKS`, `FLOCK_LOCKS`, `ATOMIC_O_TRUNC`,
+`HANDLE_KILLPRIV_V2` i `SETXATTR_EXT`. Zapisujący mount wymaga wynegocjowanych
+`ATOMIC_O_TRUNC`, `HANDLE_KILLPRIV_V2` i `SETXATTR_EXT`; bez nich start jest
+odrzucany. `HANDLE_KILLPRIV_V2` przekazuje FOD informację, że Linux usuwa
+uprawnienia uprzywilejowane wskutek zapisu, truncate, chown lub `O_TRUNC`.
+FOD stosuje flagi do set-ID i czyści pozostałe `security.capability` w
+autorytatywnej transakcji PostgreSQL zapisu. Linux może wcześniej wysłać
+wewnętrzne `REMOVEXATTR security.capability` przed zapisem. Ponieważ ten krok
+VFS może przyjść z UID zapisującego bez flagi identyfikującej przyczynę, FOD
+dopuszcza wyłącznie usunięcie tego konkretnego atrybutu bez kontroli właściciela;
+jawna nieuprzywilejowana próba `removexattr()` jest odrzucana przez Linux przed
+FUSE. W takim przebiegu usunięcie xattr jest osobną transakcją, poprzedzającą
+transakcję danych; obie są serializowane przez PostgreSQL. `SETXATTR_EXT`
+dostarcza flagę czyszczenia SGID przy zmianie access ACL. Obsługa ACL żąda
+`POSIX_ACL` tylko jeśli ACL są włączone.
 `MAX_PAGES` wpływa na maksymalny rozmiar requestu, ale nie jest wymagane do
 poprawności podstawowego mounta.
 
