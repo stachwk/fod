@@ -23,10 +23,18 @@ Reading guide:
   działają lookup, readdir, `st_nlink`, `link()`, `unlink()` z promocją nazwy
   oraz rename aliasu i zastępowanie symlinka z promocją jego aliasu. Test
   integracyjny warstwy PostgreSQL przeszedł na odizolowanej bazie PostgreSQL
-  16.15 z `BLCKSZ=32KiB`. Nadal wymagane są testy montowane na libfuse 3.18.2+
-  i Linux 6.17, testy wyścigów na dwóch mountach, pełna weryfikacja errno,
-  ścieżek roota i usuwania ostatniego linku oraz kontrola obsługi zapamiętanych
-  ścieżek inode. Zachowanie `link()` dla symlinka pozostaje
+  16.15 z `BLCKSZ=32KiB`. Dodano test montowany
+  `tests/integration/test_symlink_hardlink.py` oraz target `make
+  test-symlink-hardlink`; obejmuje Linux `link()` z no-follow, typowe błędy,
+  wspólny inode/target, znaczniki czasu, readdir, rename, promocję po unlink i
+  replacement oraz alias w roocie. Runtime zbudowany i uruchomiony w teście
+  zgłosił Linux 6.17.0-41 oraz libfuse 3.18.3, ale mount zwrócił `EPERM`
+  przed asercjami (środowisko nie ma efektywnych capabilities); izolowana baza
+  testowa została usunięta. Test wymaga ponownego uruchomienia na hoście, który
+  dopuszcza mount FUSE. Nadal wymagane są
+  pełna weryfikacja errno (w tym read-only i odmowy uprawnień), testy wyścigów
+  na dwóch mountach i kontrola obsługi zapamiętanych ścieżek inode. Zachowanie
+  `link()` dla symlinka pozostaje
   implementacyjnie zdefiniowane przez POSIX; to zgodność z Linuksem, nie
   stwierdzone naruszenie POSIX. Szczegóły i akceptacja są w
   [`docs/SYMLINK_HARDLINK_DESIGN.md`](docs/SYMLINK_HARDLINK_DESIGN.md).

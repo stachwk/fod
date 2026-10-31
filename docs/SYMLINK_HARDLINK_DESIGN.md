@@ -1,6 +1,6 @@
 # Hard links to symlink inodes
 
-Status: implementation in progress (FOD 3.4.461, schema 38).
+Status: implementation in progress (FOD 3.4.462, schema 38).
 
 Linux `link()` can add a directory entry for the symlink inode itself. POSIX
 leaves the behavior when the source names a symlink implementation-defined.
@@ -13,13 +13,25 @@ shared inode attributes, xattr ownership and link counts; alias rename and
 canonical-name promotion on unlink or replacement. The focused PostgreSQL
 integration test passed on a disposable PostgreSQL 16.15 database built with
 `--with-blocksize=32` (`SHOW block_size = 32768`). Rust source and test targets
-compile. The FUSE package was compile-checked with its pure-Rust mount backend
-because this host has libfuse 3.17.4, below FOD's required 3.18.2 minimum.
+compile. This turn rebuilt the release runtime against locally built libfuse
+3.18.3; the running FOD process reported that version.
 
-Still required: mounted Linux/libfuse regression coverage, root-path cases,
-full errno precedence checks, two-mount races, and validation of cached inode
-paths after each link mutation. Do not treat the behavior as fully verified
-until those checks pass.
+The mounted regression is now present at
+[`tests/integration/test_symlink_hardlink.py`](../tests/integration/test_symlink_hardlink.py)
+and is exposed as `make test-symlink-hardlink` (also included in
+`test-all-full`). It covers root and nested aliases, `link()` errno cases,
+shared inode/target/timestamps, readdir, rename, unlink promotion, and
+replacement promotion. The test was attempted against an isolated PostgreSQL
+16.15 database after building libfuse 3.18.3 locally. FOD reported Linux
+6.17.0-41 and libfuse
+3.18.3, but the kernel mount request returned `EPERM` before test assertions;
+the temporary database was dropped. This environment has no effective Linux
+capabilities (`CapEff=0`), so the mounted behavior remains unverified.
+
+Still required: execute the mounted regression on a host that permits FUSE
+mounts, two-mount races, full errno precedence checks, and validation of cached
+inode paths after each link mutation. Do not treat the behavior as fully
+verified until those checks pass.
 
 ## Required model
 
