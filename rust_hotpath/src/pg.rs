@@ -2689,6 +2689,10 @@ fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, Str
         if schema_is_initialized {
             // Empty databases must stay connectable so bootstrap and status paths can
             // report that initialization is still missing.
+            if let Err(err) = DbRepo::validate_required_schema_version_on_conn(conn) {
+                PQfinish(conn);
+                return Err(err);
+            }
             prepare_connection(conn).inspect_err(|_| {
                 PQfinish(conn);
             })?;

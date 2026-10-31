@@ -104,6 +104,37 @@ fn connection_value_prefers_fod_endpoint_over_legacy_postgres_env() {
     assert_eq!(prefer_connection_value(None, None, "fallback"), "fallback");
 }
 
+#[test]
+fn older_schema_is_rejected_before_current_statements_are_prepared() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let conninfo = conninfo_for_database(&temporary_db.name);
+    let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    bootstrap_repo
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (31, NOW())")?;
+    bootstrap_repo.exec("DROP TABLE fod.symlink_hardlinks CASCADE")?;
+    drop(bootstrap_repo);
+
+    let repo_result = DbRepo::with_runtime(&conninfo, &runtime)
+        .and_then(|repo| repo.schema_version().map(|_| ()));
+    match repo_result {
+        Err(error)
+            if error.contains("requires database schema 38")
+                && error.contains("database schema is 31")
+                && !error.contains("SQLSTATE 42P01") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "older schema was rejected for the wrong reason: {error}"
+        )),
+        Ok(_) => Err("database schema 31 was accepted by the current client".to_string()),
+    }
+}
+
 struct NamespaceFixture {
     repo: DbRepo,
     directory_name: String,

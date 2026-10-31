@@ -9,7 +9,10 @@ use super::{
     postgres_version_diagnostics_on_conn, query_rows_text_on_conn, query_scalar_text_on_conn,
     schema_is_initialized_on_conn, DbRepo, PGconn,
 };
-use fod_rust_runtime::{PostgresRuntimeRequirements, PostgresVersionDiagnostics, FOD_SCHEMA_NAME};
+use fod_rust_runtime::{
+    PostgresRuntimeRequirements, PostgresVersionDiagnostics, FOD_REQUIRED_SCHEMA_VERSION,
+    FOD_SCHEMA_NAME, FOD_VERSION,
+};
 use std::ffi::CString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +71,33 @@ impl DbRepo {
 
     pub fn is_in_recovery(&self) -> Result<bool, String> {
         self.with_cached_connection(|conn| unsafe { Self::is_in_recovery_on_conn(conn) })
+    }
+
+    pub(super) unsafe fn validate_required_schema_version_on_conn(
+        conn: *mut PGconn,
+    ) -> Result<(), String> {
+        let sql = CString::new(
+            "SELECT COALESCE((\
+                SELECT COALESCE(to_jsonb(schema_row)->>'schema_number', to_jsonb(schema_row)->>'version') \
+                FROM schema_version AS schema_row \
+                ORDER BY applied_at DESC LIMIT 1\
+             ), '')",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let value = query_scalar_text_on_conn(conn, &sql)?;
+        if value.trim().is_empty() {
+            return Err("initialized FOD schema is missing schema version".to_string());
+        }
+        let schema_version = value
+            .trim()
+            .parse::<u32>()
+            .map_err(|err| format!("invalid schema version returned by PostgreSQL: {err}"))?;
+        if schema_version < FOD_REQUIRED_SCHEMA_VERSION {
+            return Err(format!(
+                "FOD client {FOD_VERSION} requires database schema {FOD_REQUIRED_SCHEMA_VERSION}; run `mkfs.fod upgrade` (database schema is {schema_version})"
+            ));
+        }
+        Ok(())
     }
 
     unsafe fn schema_version_on_conn(conn: *mut PGconn) -> Result<Option<u32>, String> {

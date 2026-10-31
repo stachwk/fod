@@ -67,6 +67,13 @@ RETURNING` may produce zero rows, so this path uses the optional scalar decoder
 before querying the authoritative reason. Regression coverage exercises both
 outcomes independently.
 
+FOD 3.4.470 checks an initialized database's schema version before preparing
+current-client SQL statements. An old schema now fails with the required
+`mkfs.fod upgrade` instruction instead of a secondary undefined-table SQL
+error. `older_schema_is_rejected_before_current_statements_are_prepared`
+reproduces schema 31 with a version-38 table removed and checks the startup
+error.
+
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and
