@@ -704,3 +704,21 @@ database afterward. The disposable database was removed. No pre-fix
 byte-corruption reproduction was recorded; the source-level race mechanism is
 supported by the transactions and the regression confirms the corrected
 serialization and copy-on-write isolation.
+
+### `create()` reply after concurrent path replacement
+
+FUSE `create()` committed the new row and bound its file handle to the returned
+`file_id`, then looked up the path again to construct the `CREATE` reply. A
+second mount could unlink the new name and create a replacement before that
+lookup. The callback then returned the replacement's inode attributes together
+with the original file handle. `create()` now loads reply attributes by the
+handle's `file_id`, including when that inode has been unlinked in the race.
+
+`test_create_write_ownership.py` uses an integration-only barrier after the
+create transaction commits and before the FUSE reply. Mount B unlinks and
+recreates the name while mount A is paused. With the old path-based reply, the
+test failed deterministically because both handles reported the replacement
+inode. With the ID-bound reply, the original handle and replacement have
+different inode numbers and independent payloads. The full test passed on FOD
+3.4.451 in `release-lto` against a disposable PostgreSQL 16.15 database on
+Linux 6.17.0-41-generic/libfuse3 3.18.3; the database was dropped afterward.

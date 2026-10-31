@@ -14,6 +14,18 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`create()` nie może zwrócić inode zastępcy po wyścigu unlink/recreate.**
+  Po zatwierdzeniu nowego pliku FUSE pobierało atrybuty ponownie po ścieżce,
+  mimo że uchwyt już wskazywał konkretne `file_id`. Drugi mount mógł w tym
+  oknie usunąć nazwę i utworzyć pod nią inny plik, przez co odpowiedź `CREATE`
+  łączyła inode zastępcy z uchwytem pierwotnego pliku. `create()` pobiera teraz
+  atrybuty po zapisanym w uchwycie `file_id`. Dwumountowy test z barierą po
+  commicie odtworzył błąd przed poprawką (oba deskryptory miały inode
+  zastępcy), a po zmianie wykazał różne inode i niezależne payloady. Cały
+  `test_create_write_ownership.py` przeszedł 2026-10-31 na Linux 6.17.0-41,
+  libfuse3 3.18.3 i PostgreSQL 16.15; użyto usuniętej po teście bazy
+  tymczasowej.
+
 - [x] **Obsłużyć i zweryfikować długie ścieżki w indeksach indeksatora.**
   Źródło problemu było potwierdzone w kodzie: `WalkDir` zapisuje ścieżkę
   względną bez limitu aplikacyjnego, podczas gdy B-tree pełnego tekstu może

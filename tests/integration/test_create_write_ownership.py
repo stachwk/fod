@@ -16,6 +16,7 @@ FAIL_FAST_SECONDS = 1.0
 BARRIER_TIMEOUT_SECONDS = 10.0
 LEASE_TIMEOUT_SECONDS = 10.0
 BARRIER_ENV = "FOD_TEST_CREATE_BEFORE_OWNERSHIP_BARRIER_DIR"
+POST_CREATE_BARRIER_ENV = "FOD_TEST_CREATE_AFTER_COMMIT_BARRIER_DIR"
 
 
 def sql_quote(value: str) -> str:
@@ -170,8 +171,18 @@ def main() -> None:
         try:
             barrier_dir = temp / "create-barrier"
             barrier_dir.mkdir()
+            post_create_barrier_dir = temp / "post-create-barrier"
+            post_create_barrier_dir.mkdir()
 
-            launcher_a.start(str(mount_a_dir), log_prefix="/tmp/fod-create-own-a")
+            previous_post_create_barrier = os.environ.get(POST_CREATE_BARRIER_ENV)
+            os.environ[POST_CREATE_BARRIER_ENV] = str(post_create_barrier_dir)
+            try:
+                launcher_a.start(str(mount_a_dir), log_prefix="/tmp/fod-create-own-a")
+            finally:
+                if previous_post_create_barrier is None:
+                    os.environ.pop(POST_CREATE_BARRIER_ENV, None)
+                else:
+                    os.environ[POST_CREATE_BARRIER_ENV] = previous_post_create_barrier
 
             previous_barrier = os.environ.get(BARRIER_ENV)
             os.environ[BARRIER_ENV] = str(barrier_dir)
@@ -220,6 +231,69 @@ def main() -> None:
                 f"loser_errno={loser_errno} "
                 f"loser_elapsed_ms={elapsed * 1000.0:.3f}"
             )
+
+            # Pause CREATE after its PostgreSQL commit but before its FUSE
+            # reply. A second mount removes and replaces the name in that
+            # window. The original fd must keep the created inode identity.
+            race_name = f"create-reply-replacement-{uuid.uuid4().hex}.bin"
+            race_path_a = mount_a_dir / race_name
+            race_path_b = mount_b_dir / race_name
+            (post_create_barrier_dir / "ready").unlink(missing_ok=True)
+            (post_create_barrier_dir / "release").unlink(missing_ok=True)
+            (post_create_barrier_dir / "target").write_text(
+                f"/{race_name}", encoding="utf-8"
+            )
+            create_thread, create_result = start_open(
+                race_path_a,
+                os.O_CREAT | os.O_EXCL | os.O_RDWR,
+            )
+            wait_barrier_ready(post_create_barrier_dir)
+            race_fd_a = None
+            race_fd_b = None
+            try:
+                race_path_b.unlink()
+                race_fd_b = os.open(
+                    race_path_b,
+                    os.O_CREAT | os.O_EXCL | os.O_RDWR,
+                    0o644,
+                )
+                os.write(race_fd_b, b"replacement")
+                os.fsync(race_fd_b)
+            finally:
+                release_barrier(post_create_barrier_dir)
+            race_fd_a, create_errno = finish_open(
+                create_thread,
+                create_result,
+                "create reply replacement race",
+            )
+            if create_errno is not None or race_fd_a is None:
+                raise AssertionError(
+                    "CREATE failed after concurrent pathname replacement: "
+                    f"errno={create_errno}"
+                )
+            original_inode = os.fstat(race_fd_a).st_ino
+            assert race_fd_b is not None
+            replacement_inode = os.fstat(race_fd_b).st_ino
+            if original_inode == replacement_inode:
+                raise AssertionError(
+                    "CREATE reply bound the original handle to the replacement inode: "
+                    f"inode={original_inode}"
+                )
+            os.write(race_fd_a, b"original")
+            os.fsync(race_fd_a)
+            if os.pread(race_fd_a, 8, 0) != b"original":
+                raise AssertionError("original CREATE handle lost its file identity")
+            if race_path_b.read_bytes() != b"replacement":
+                raise AssertionError("original CREATE handle modified the replacement")
+            print(
+                "OK create-reply-path-replacement "
+                f"original_inode={original_inode} replacement_inode={replacement_inode}"
+            )
+            os.close(race_fd_a)
+            os.close(race_fd_b)
+            fd_b = None
+            wait_for_ownership_cleanup(launcher_a, race_name)
+            wait_for_ownership_cleanup(launcher_b, race_name)
 
             if fd_a is not None:
                 os.close(fd_a)

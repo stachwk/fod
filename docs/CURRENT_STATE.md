@@ -61,6 +61,10 @@ writes using PostgreSQL advisory locks in sorted resource-key order. The mounted
 C9 regression confirms that a source write after the copy detaches its data
 object and leaves destination bytes unchanged; details and environment are in
 the [primary-authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md).
+FOD 3.4.451 also binds the FUSE `create()` reply attributes to the file ID held
+by its open handle. A two-mount test replaces the created path after commit but
+before reply, verifying the descriptor retains the original inode and payload
+instead of receiving metadata from the replacement.
 The eight-thread `concurrent_threads_unlink_and_replace_many_open_file_tasks`
 regression runs 32 unlink/recreate tasks together and verifies each old open
 descriptor still reads its original inode while each pathname reads a distinct
@@ -435,7 +439,7 @@ operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
 The schema-admission gate first shipped in FOD 3.4.443 with schema version 34;
-FOD 3.4.450 currently requires schema version 37. Migrations 36 and 37
+FOD 3.4.451 currently requires schema version 37. Migrations 36 and 37
 normalize legacy POSIX modes and widen the entity-ID graph. The latter changes
 column and index types, so run production upgrades only in a maintenance window.
 Before applying migrations, `mkfs.fod upgrade` raises the database client floor

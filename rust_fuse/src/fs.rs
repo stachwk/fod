@@ -4944,6 +4944,56 @@ impl FodFuse {
         Ok(())
     }
 
+    // Integration-test-only deterministic race hook between CREATE commit and
+    // the FUSE reply. It lets another mount replace the pathname while the
+    // original open handle remains bound to its committed file_id.
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_create_after_commit_before_attrs_barrier(path: &str) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_CREATE_AFTER_COMMIT_BARRIER_DIR") else {
+            return Ok(());
+        };
+
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target_path = barrier_dir.join("target");
+        let target = match fs::read_to_string(&target_path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test post-create barrier target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+        if target != path {
+            return Ok(());
+        }
+
+        if let Err(err) = fs::write(barrier_dir.join("ready"), path.as_bytes()) {
+            warn!(
+                "FOD test post-create barrier ready write failed path={} err={}",
+                path, err
+            );
+            return Err(EIO);
+        }
+        let release_path = barrier_dir.join("release");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !release_path.exists() {
+            if Instant::now() >= deadline {
+                warn!("FOD test post-create barrier timeout path={}", path);
+                return Err(EIO);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let _ = fs::remove_file(target_path);
+        Ok(())
+    }
+
     // Integration-test-only deterministic rename race hook.
     // This code is absent from normal production builds.
     #[cfg(feature = "integration-test-hooks")]
@@ -9474,7 +9524,26 @@ impl Filesystem for FodFuse {
             );
         }
 
-        match self.lookup_path_from_authority(&child_path) {
+        #[cfg(feature = "integration-test-hooks")]
+        if let Err(errno) = Self::test_create_after_commit_before_attrs_barrier(&child_path) {
+            self.rollback_open_handle(fh);
+            if created_new {
+                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                    warn!(
+                        "FOD create rollback after post-commit test barrier failed path={} file_id={} err={}",
+                        child_path, file_id, err
+                    );
+                }
+            }
+            fuse_reply_error!(reply, errno);
+            return;
+        }
+
+        // CREATE has already committed this file_id and installed an open
+        // lease. A concurrent mount can unlink and replace child_path before
+        // the FUSE reply; attributes must remain bound to the created handle,
+        // not be taken from whatever object now occupies that path.
+        match self.attrs_for_open_file_id(file_id) {
             Ok(Some(attrs)) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 if created_new {

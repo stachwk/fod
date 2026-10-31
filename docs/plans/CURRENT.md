@@ -72,6 +72,15 @@ the two-mount regression pauses replica replay, extends on primary, then
 extends through the replica-routed mount and verifies preserved bytes via FUSE
 and in the primary payload row. Continue the remaining mutation-precondition
 audit; this closes one stale-read path, not the entire authority audit.
+
+FOD 3.4.451 fixes a separate `create()` reply race: after the create transaction
+committed, a second mount could replace the path before FUSE loaded reply
+attributes, pairing the replacement inode with the original file handle. The
+callback now builds attributes from the handle's committed `file_id`. The
+two-mount regression failed with the old path lookup and passed with the fix;
+the full create/write ownership test passed on Linux 6.17.0-41/libfuse3 3.18.3
+against a disposable PostgreSQL 16.15 database. Continue auditing remaining
+mutation preconditions.
 Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.
