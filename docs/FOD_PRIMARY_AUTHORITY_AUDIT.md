@@ -984,4 +984,11 @@ configured PostgreSQL 16.15 FOD container after confirming
 `pg_config --configure` includes `--with-blocksize=32` and runtime
 `SHOW block_size=32768`. That test uses SELECT-only decoder fixtures and does
 not change the shared schema-31 database. Operation-level PostgreSQL tests for
-copy metadata and expired-session pruning remain pending.
+copy metadata and expired-session pruning were then added in FOD 3.4.494 and
+passed against isolated schema-38 databases on the same verified PostgreSQL
+16.15 `BLCKSZ=32KiB` server. The adoption regression injects a negative stored
+file size and verifies that no destination metadata changes; the session test
+confirms expired-row removal, active-row preservation and both return values.
+Temporary databases are created/dropped through the `postgres` database, so
+the fixtures do not depend on the shared FOD database meeting the current
+schema floor. The schema-31 shared database was left unchanged.

@@ -2426,5 +2426,18 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   configured PostgreSQL 16.15 FOD container after verifying its
   `--with-blocksize=32` configure flag and runtime `SHOW block_size=32768`.
   `cargo check`, formatting and version checks also pass. This pure decoder
-  query does not mutate the shared schema-31 database; operation-level tests
-  for copy and expired-session pruning remain pending.
+  query does not mutate the shared schema-31 database. In FOD 3.4.494, isolated
+  schema-38 operation tests also pass for malformed copy metadata and expired
+  session pruning; details are in the following item.
+
+## FOD 3.4.494 — isolate PostgreSQL query tests from the shared FOD database
+
+- [x] Create and drop temporary test databases through a `postgres`-database
+  admin connection, so a shared FOD database below the current schema floor
+  cannot block database setup or receive test DDL. Move the schema-corruption
+  source-adoption regression off the shared database. Add an isolated operation
+  test for expired-session pruning: it removes the expired session, preserves
+  the active one, reports `true` after deletion and `false` when no rows remain.
+  Both tests passed on PostgreSQL 16.15 after verifying the FOD
+  `--with-blocksize=32` build and live `SHOW block_size=32768`; temporary
+  databases were dropped and the shared schema-31 database was not modified.

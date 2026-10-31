@@ -54,7 +54,8 @@ struct TemporaryDatabase {
 
 impl TemporaryDatabase {
     fn create() -> Result<Self, String> {
-        let admin_repo = repo_with_runtime()?;
+        let runtime = RuntimeConfig::from_env()?;
+        let admin_repo = DbRepo::with_runtime(&conninfo_for_database("postgres"), &runtime)?;
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|err| err.to_string())?
@@ -89,6 +90,23 @@ fn repo_with_swap_cleanup(cleanup: DataObjectSwapCleanup) -> Result<DbRepo, Stri
 fn repo_with_runtime_config(mut runtime: RuntimeConfig) -> Result<DbRepo, String> {
     runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
     DbRepo::with_runtime(&conninfo_from_env(), &runtime)
+}
+
+fn repo_with_temporary_current_schema() -> Result<(TemporaryDatabase, DbRepo), String> {
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let conninfo = conninfo_for_database(&temporary_db.name);
+    let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    bootstrap_repo.exec("TRUNCATE TABLE fod.schema_version")?;
+    bootstrap_repo
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+    drop(bootstrap_repo);
+
+    let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    repo.ensure_client_session_schema()?;
+    Ok((temporary_db, repo))
 }
 
 #[test]
@@ -3714,7 +3732,7 @@ fn schema_below_client_floor_is_rejected_before_data_object_mutation() -> Result
 #[test]
 fn source_adoption_rejects_malformed_file_info_instead_of_falling_back() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
-    let repo = repo_with_runtime()?;
+    let (_temporary_db, repo) = repo_with_temporary_current_schema()?;
 
     let source_name = unique_name("rust_pg_bad_adoption_source");
     let destination_name = unique_name("rust_pg_bad_adoption_destination");
@@ -3779,6 +3797,55 @@ fn source_adoption_rejects_malformed_file_info_instead_of_falling_back() -> Resu
         .and(restore_constraint)
         .and(purge_source)
         .and(purge_destination)
+}
+
+#[test]
+fn prune_expired_client_sessions_validates_returned_rows() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let (_temporary_db, repo) = repo_with_temporary_current_schema()?;
+    let active_session = repo.register_client_session(
+        "prune-session-test",
+        &unique_name("active_mount"),
+        "primary",
+        "postgres_lease",
+        u64::from(std::process::id()),
+        60,
+    )?;
+    let expired_session = repo.register_client_session(
+        "prune-session-test",
+        &unique_name("expired_mount"),
+        "primary",
+        "postgres_lease",
+        u64::from(std::process::id()).saturating_add(1),
+        60,
+    )?;
+    repo.exec(&format!(
+        "UPDATE fod.client_sessions SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE session_id = {expired_session}"
+    ))?;
+
+    if !repo.prune_expired_client_sessions()? {
+        return Err("expired-session pruning reported no deleted rows".to_string());
+    }
+    let expired_count = repo.query_scalar_text(&format!(
+        "SELECT COUNT(*) FROM fod.client_sessions WHERE session_id = {expired_session}"
+    ))?;
+    if expired_count.trim() != "0" {
+        return Err(format!(
+            "expired session remains after pruning: {expired_count}"
+        ));
+    }
+    let active_count = repo.query_scalar_text(&format!(
+        "SELECT COUNT(*) FROM fod.client_sessions WHERE session_id = {active_session}"
+    ))?;
+    if active_count.trim() != "1" {
+        return Err(format!(
+            "active session was unexpectedly pruned: {active_count}"
+        ));
+    }
+    if repo.prune_expired_client_sessions()? {
+        return Err("second prune reported deleted rows when none were expired".to_string());
+    }
+    Ok(())
 }
 
 #[test]
