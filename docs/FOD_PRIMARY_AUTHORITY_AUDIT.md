@@ -5,29 +5,32 @@ Document role: topic review/specification supporting the
 summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
-Date: 2026-10-25. Updated: 2026-10-27. Scope: the current working tree, Rust FUSE runtime and its
-PostgreSQL repository. The historical unlink data-loss case below is repaired
-and its mounted regression was verified on 2026-10-26. Other mutation families
-still require the reviews listed at the end.
+Date: 2026-10-25. Updated: 2026-10-31. Reviewed base: FOD 3.4.394
+(`2afd192`). Scope: Rust FUSE runtime and its PostgreSQL repository. The
+historical unlink data-loss case below is repaired and its mounted regression
+was verified on 2026-10-26. Later increments addressed specific stale or
+replica-routed mutation inputs, authorization checks and inode/path bindings;
+the current evidence is summarized in the routing matrix and follow-up sections
+below. This remains a targeted review, not an exhaustive proof that every
+mutating callback and repository transaction has been audited.
 
 ## Result
 
 Mutation SQL and authoritative session/ownership operations use the primary
-connection targets in a role-routed writable mount. FUSE `access()` now also
-loads request inode attributes from primary before applying the root `X_OK`
-execute-bit rule when FUSE handles permission checks; a paused-replica regression
-covers it. Parent search checks in `lookup`, `open`, path `getattr` and `opendir`
-also run through FOD when kernel `default_permissions` is enabled. Linux uses
-cached inode attributes for its local permission precheck and requests FUSE
-`GETATTR` when their TTL expires; FOD now returns zero attribute TTL for this
-mount option and loads path attributes from the authoritative source in
-`getattr()`. A read-only mount with a configured positive TTL and paused-replica
-regression confirms remote execute-bit revocation is visible to
-`access(X_OK)`. Unlink now revalidates the
-namespace and decides link/open/unlink/purge outcomes in one primary transaction.
-The full mounted unlink regression passes with replica replay paused. Other
-FUSE mutation preconditions still use replica-routed or cached reads, so this
-does not close the remaining authority review.
+connection targets in a role-routed writable mount. The original unlink bug,
+where a lagging replica could drive link/open/unlink/purge decisions, is fixed
+by one primary transaction. Follow-up reviews moved specific write and copy
+inputs (sizes and payload bytes), pathname and inode identity checks, parent
+permission/ACL decisions, timestamp authorization and open-handle metadata to
+primary-backed or transaction-locked operations. `access()` loads request inode
+attributes from primary before applying root's `X_OK` execute-bit rule when FOD
+handles permission checks; paused-replica regressions cover that case and
+kernel `default_permissions` attribute refresh. The source review remains open:
+these findings do not establish that every mutating callback revalidates every
+decision inside the transaction that commits its change. Keep general writable
+replica-read routing disabled until that caller-by-caller review and the
+separate cross-host cache-coherence work are complete. The current bounded
+evidence and known exclusions are listed in the matrix and sections below.
 
 ## Historical P1: replica-based unlink decision deleted a surviving hardlink
 
