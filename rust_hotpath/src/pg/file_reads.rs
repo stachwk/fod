@@ -7,7 +7,7 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, exec_prepared_params_with_result_format,
-    fetch_optional_single_row_texts, fetch_single_text_option, fod_profile_io_enabled,
+    fetch_optional_single_row_texts_exact, fetch_single_text_option, fod_profile_io_enabled,
     fod_profile_result_decode_observe, normalize_block_bytes, result_error, DbRepo, PGresult,
     PQclear, PQexecParams, PQgetisnull, PQgetlength, PQgetvalue, PQnfields, PQntuples,
     PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
@@ -485,15 +485,10 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_prepared_params(conn, PreparedStatement::FileReadMetadata, &params)?;
-            let Some(row) = fetch_optional_single_row_texts(res)? else {
+            let Some(row) = fetch_optional_single_row_texts_exact(res, 4, "file read metadata")?
+            else {
                 return Ok(None);
             };
-            if row.len() != 4 {
-                return Err(format!(
-                    "invalid file read metadata row: expected 4 columns, got {}",
-                    row.len()
-                ));
-            }
             let size = row[0]
                 .trim()
                 .parse::<u64>()

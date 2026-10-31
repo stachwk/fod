@@ -2913,10 +2913,35 @@ unsafe fn fetch_single_text_option(res: *mut PGresult) -> Result<Option<String>,
 unsafe fn fetch_optional_single_row_texts(
     res: *mut PGresult,
 ) -> Result<Option<Vec<String>>, String> {
+    fetch_optional_single_row_texts_with_expected_columns(res, None)
+}
+
+unsafe fn fetch_optional_single_row_texts_exact(
+    res: *mut PGresult,
+    expected_columns: usize,
+    description: &str,
+) -> Result<Option<Vec<String>>, String> {
+    fetch_optional_single_row_texts_with_expected_columns(
+        res,
+        Some((expected_columns, description)),
+    )
+}
+
+unsafe fn fetch_optional_single_row_texts_with_expected_columns(
+    res: *mut PGresult,
+    expected_columns: Option<(usize, &str)>,
+) -> Result<Option<Vec<String>>, String> {
     let result = (|| match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
+            if let Some((expected, description)) = expected_columns {
+                if cols as usize != expected {
+                    return Err(format!(
+                        "invalid PostgreSQL {description} result: expected {expected} columns, got {cols}"
+                    ));
+                }
+            }
             if cols < 1 {
                 Err("invalid PostgreSQL row result: expected at least 1 column".to_string())
             } else if rows == 0 {
@@ -6582,10 +6607,16 @@ impl DbRepo {
                 PGRES_TUPLES_OK => {
                     let rows = PQntuples(res);
                     let cols = PQnfields(res);
-                    if rows == 0 {
+                    if cols != 1 {
+                        Err(format!(
+                            "invalid file data-object result: expected 1 column, got {cols}"
+                        ))
+                    } else if rows == 0 {
                         Ok(None)
-                    } else if rows != 1 || cols != 1 {
-                        Err("invalid file data-object row returned by PostgreSQL".to_string())
+                    } else if rows != 1 {
+                        Err(format!(
+                            "invalid file data-object result: expected 1 row, got {rows} rows"
+                        ))
                     } else if PQgetisnull(res, 0, 0) != 0 {
                         Err("file data_object_id is NULL".to_string())
                     } else {
@@ -6619,15 +6650,11 @@ impl DbRepo {
         unsafe {
             let params = [&file_id];
             let res = exec_prepared_params(conn, PreparedStatement::FileDataObjectInfo, &params)?;
-            let Some(values) = fetch_optional_single_row_texts(res)? else {
+            let Some(values) =
+                fetch_optional_single_row_texts_exact(res, 2, "file data-object info")?
+            else {
                 return Ok(None);
             };
-            if values.len() != 2 {
-                return Err(format!(
-                    "invalid file data-object info row: expected 2 columns, got {}",
-                    values.len()
-                ));
-            }
             if values[0].trim().is_empty() {
                 return Err("file data_object_id is NULL".to_string());
             }
@@ -8590,10 +8617,16 @@ impl DbRepo {
                 PGRES_TUPLES_OK => {
                     let rows = PQntuples(res);
                     let cols = PQnfields(res);
-                    if rows == 0 {
+                    if cols != 1 {
+                        Err(format!(
+                            "invalid file unlinked-state result: expected 1 column, got {cols}"
+                        ))
+                    } else if rows == 0 {
                         Ok(None)
-                    } else if rows != 1 || cols != 1 {
-                        Err("invalid file unlinked-state row returned by PostgreSQL".to_string())
+                    } else if rows != 1 {
+                        Err(format!(
+                            "invalid file unlinked-state result: expected 1 row, got {rows} rows"
+                        ))
                     } else if PQgetisnull(res, 0, 0) != 0 {
                         Err("file unlinked flag is NULL".to_string())
                     } else {
@@ -8635,17 +8668,11 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
-            let Some(row) = fetch_optional_single_row_texts(res)
+            let Some(row) = fetch_optional_single_row_texts_exact(res, 2, "file link count")
                 .map_err(|error| format!("invalid file unlinked/link-count row: {error}"))?
             else {
                 return Ok(None);
             };
-            if row.len() != 2 {
-                return Err(format!(
-                    "invalid file link-count row: expected 2 columns, got {}",
-                    row.len()
-                ));
-            }
             match row[0].trim().to_ascii_lowercase().as_str() {
                 "t" | "true" => {}
                 "f" | "false" => {}
@@ -8670,10 +8697,12 @@ impl DbRepo {
                 return Err(conn_error(conn));
             }
             match PQresultStatus(res) {
-                PGRES_TUPLES_OK => match fetch_optional_single_row_texts(res)? {
-                    None => Ok(None),
-                    Some(row) => Ok(Some(join_nul_text(&row))),
-                },
+                PGRES_TUPLES_OK => {
+                    match fetch_optional_single_row_texts_exact(res, 10, "file attribute")? {
+                        None => Ok(None),
+                        Some(row) => Ok(Some(join_nul_text(&row))),
+                    }
+                }
                 _ => {
                     let err = result_error(res);
                     PQclear(res);
@@ -10916,7 +10945,7 @@ impl DbRepo {
         let chosen = {
             let params = [&file_id_param];
             let res = exec_params(conn, &sql_choose, &params)?;
-            fetch_optional_single_row_texts(res)?.unwrap_or_default()
+            fetch_optional_single_row_texts_exact(res, 3, "hardlink promotion")?.unwrap_or_default()
         };
 
         if !chosen.is_empty() {
@@ -15743,6 +15772,15 @@ mod tests {
                 }
                 fetch_optional_single_row_texts(res)
             };
+            let query_exact_row = |sql: &str| -> Result<Option<Vec<String>>, String> {
+                let sql =
+                    CString::new(sql).map_err(|_| "test exact-row SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_optional_single_row_texts_exact(res, 2, "test exact row")
+            };
             let query_column = |sql: &str| -> Result<Vec<String>, String> {
                 let sql =
                     CString::new(sql).map_err(|_| "test column SQL contains NUL".to_string())?;
@@ -15770,6 +15808,24 @@ mod tests {
                 }
                 if query_row("SELECT 'value'::text WHERE FALSE")?.is_some() {
                     return Err("optional row decoder did not preserve no-row state".to_string());
+                }
+                if query_exact_row("SELECT 'first'::text, 'second'::text")?
+                    != Some(vec!["first".to_string(), "second".to_string()])
+                {
+                    return Err("exact optional row decoder changed a valid row".to_string());
+                }
+                if query_exact_row("SELECT 1::text, 2::text WHERE FALSE")?.is_some() {
+                    return Err("exact optional row decoder changed valid absence".to_string());
+                }
+                for sql in [
+                    "SELECT 1::text WHERE FALSE",
+                    "SELECT FROM pg_catalog.pg_class WHERE FALSE",
+                ] {
+                    if query_exact_row(sql).is_ok() {
+                        return Err(format!(
+                            "exact optional row decoder accepted a mismatched empty result: {sql}"
+                        ));
+                    }
                 }
                 for sql in [
                     "SELECT NULL::text",

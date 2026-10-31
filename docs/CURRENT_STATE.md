@@ -131,6 +131,12 @@ extends exact column-count validation to specialized xattr, file-size and block
 read decoders, including zero-row results. All 72 `pg_query` tests passed on a
 disposable schema-38 admin database against the verified PostgreSQL 16.15
 `BLCKSZ=32KiB` server; the database was dropped after testing.
+FOD 3.4.480 extends exact-column validation to other optional row decoders and
+attribute blobs, including file metadata, data-object information, link counts,
+special files and statfs snapshots. The row-decoder regression covers a
+zero-row result whose column count does not match the expected shape. It passed,
+and all 72 `pg_query` tests passed serially against the verified PostgreSQL
+16.15 `BLCKSZ=32KiB` server.
 
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required

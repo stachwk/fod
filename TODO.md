@@ -949,6 +949,13 @@ Reading guide:
   nullable columns), all 72 `pg_query` tests passed serially on PostgreSQL
   16.15 with the verified `BLCKSZ=32KiB` build. The disposable admin database
   was dropped after the run.
+  FOD 3.4.480 adds `fetch_optional_single_row_texts_exact()` and uses it for
+  file-read metadata, file data-object information, link counts, path/file
+  attributes, hardlink promotion and statfs snapshots. It checks the exact
+  result-column contract before returning `None` for zero rows. File mode,
+  symlink target, special-file metadata and file-unlinked decoders now apply
+  the same check. The PostgreSQL row-decoder regression also verifies
+  mismatched column counts on empty results.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

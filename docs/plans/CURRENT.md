@@ -34,6 +34,11 @@ read decoders. All 72 `pg_query` tests passed serially against a disposable
 schema-38 admin database on the verified PostgreSQL 16.15 `BLCKSZ=32KiB` build;
 the configured schema-31 admin database was left unchanged and the disposable
 database was dropped after the run.
+FOD 3.4.480 applies exact result-column contracts to the remaining optional
+row readers and adds a zero-row/mismatched-column regression. Continue the
+broader database fault-injection audit. The focused decoder regression and all
+72 `pg_query` tests passed against the verified PostgreSQL 16.15
+`BLCKSZ=32KiB` server.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

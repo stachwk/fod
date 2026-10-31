@@ -892,4 +892,8 @@ including zero-row results. The configured admin database is schema 31, so the
 first test attempt correctly stopped before assertions. A disposable schema-38
 admin database was initialized, all 72 `pg_query` tests passed serially on the
 verified PostgreSQL 16.15 `BLCKSZ=32KiB` build, and the disposable database was
-dropped afterward.
+dropped afterward. FOD 3.4.480 extends exact-column validation to the remaining
+optional metadata readers and attribute blobs; its row-decoder regression now
+checks mismatched shapes even when a query returns zero rows. That regression
+and all 72 `pg_query` tests passed against the verified PostgreSQL 16.15
+`BLCKSZ=32KiB` server.
