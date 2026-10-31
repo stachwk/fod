@@ -32,8 +32,10 @@ Stan implementacji:
 - Lokalny cache bloków odrzuca teraz fill rozpoczęty przed lokalnym
   unieważnieniem; wymaga to jeszcze deterministycznej walidacji runtime.
 - `FOD_READ_CACHE_BLOCKS=0` wyłącza teraz cache bloków Rust także w trybie
-  direct I/O; poprzednia implementacja zachowywała pojemność co najmniej jednego
-  bloku. Macierz TX03J.1 trzeba powtórzyć dla poprawnie wyłączonego cache.
+  direct I/O i omija wcześniej zapełnione wpisy także po przeładowaniu
+  konfiguracji; poprzednia implementacja zachowywała pojemność co najmniej
+  jednego bloku, a pojedynczy odczyt mógł nadal trafić do już zapełnionego
+  cache. Macierz TX03J.1 trzeba powtórzyć dla poprawnie wyłączonego cache.
 - Zdalny trwały dziennik zdarzeń, zwykły runtime listener FUSE i selektywne
   unieważnianie cache jądra nie są zaimplementowane. `fsync()` nie czeka dziś
   na potwierdzenia innych mountów.

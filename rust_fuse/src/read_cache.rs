@@ -533,6 +533,12 @@ impl FodFuse {
 
     pub(crate) fn cached_read_block(&self, file_id: u64, block_index: u64) -> Option<Arc<[u8]>> {
         let started = Instant::now();
+        // A runtime reload can set the cache limit to zero while older entries
+        // are still resident. Bypass both cache layers, including those entries.
+        if self.read_cache_limit_blocks() == 0 {
+            self.record_cached_read_block_elapsed(started.elapsed());
+            return None;
+        }
         if let Some(block) = self.recent_write_block(file_id, block_index) {
             self.record_cached_read_block_elapsed(started.elapsed());
             return Some(block);

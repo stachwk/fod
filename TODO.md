@@ -34,8 +34,10 @@ Reading guide:
   wyłącznie lokalny stan zapisu. Przy projektowaniu bariery określić semantykę
   ACK po stronie kernela i uwzględnić starsze operacje odczytu, które mogą
   ponownie opublikować dane w cache. Dodatkowo `FOD_READ_CACHE_BLOCKS=0`
-  wcześniej nadal zostawiało blok w cache, więc macierz TX03J trzeba powtórzyć
-  po poprawce semantyki zera. Kontrakt, status i bramy opisuje
+  wcześniej nadal zostawiało blok w cache, a pojedynczy odczyt po zmianie
+  konfiguracji mógł trafić do wcześniej zapełnionego wpisu. Limit zero omija
+  teraz oba źródła cache; macierz TX03J trzeba powtórzyć. Kontrakt, status i
+  bramy opisuje
   [`docs/TX03J_CROSS_MOUNT_CACHE_COHERENCE.md`](docs/TX03J_CROSS_MOUNT_CACHE_COHERENCE.md).
 
 - [ ] **Uruchomić regresję nie-UTF-8 nazw źródłowych indeksatora.**
