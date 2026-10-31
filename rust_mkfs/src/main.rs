@@ -28,10 +28,10 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 36;
+const SCHEMA_VERSION: u64 = 37;
 const _: () = assert!(SCHEMA_VERSION as u32 == FOD_REQUIRED_SCHEMA_VERSION);
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 36] = [
+const MIGRATION_FILES: [&str; 37] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -68,9 +68,10 @@ const MIGRATION_FILES: [&str; 36] = [
     "0034_align_numeric_column_ranges.sql",
     "0035_hash_long_indexer_paths.sql",
     "0036_normalize_posix_mode_values.sql",
+    "0037_widen_entity_identifiers.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 36] = [
+const MIGRATION_DESCRIPTIONS: [&str; 37] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -107,6 +108,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 36] = [
     "Align SQL numeric columns with Linux and Rust value ranges",
     "Use collision-safe digest indexes for long indexer paths and source names",
     "Normalize legacy full modes and constrain POSIX permission values",
+    "Widen entity identifiers, references and serial sequences to BIGINT",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -322,6 +324,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0036_normalize_posix_mode_values.sql"
         )),
+        37 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0037_widen_entity_identifiers.sql"
+        )),
         _ => "",
     }
 }
@@ -364,6 +370,7 @@ fn migration_description(version: u64) -> &'static str {
         34 => MIGRATION_DESCRIPTIONS[33],
         35 => MIGRATION_DESCRIPTIONS[34],
         36 => MIGRATION_DESCRIPTIONS[35],
+        37 => MIGRATION_DESCRIPTIONS[36],
         _ => "Migration",
     }
 }
@@ -406,6 +413,7 @@ fn migration_filename(version: u64) -> &'static str {
         34 => MIGRATION_FILES[33],
         35 => MIGRATION_FILES[34],
         36 => MIGRATION_FILES[35],
+        37 => MIGRATION_FILES[36],
         _ => "unknown.sql",
     }
 }
@@ -1587,6 +1595,9 @@ mod tests {
         assert!(!sql.contains("ON index_catalog_snapshot_files (id_catalog_snapshot, path)"));
         assert!(sql.contains("directories_mode_octal_check"));
         assert!(sql.contains("files_mode_octal_check"));
+        assert!(sql.contains("id_directory BIGSERIAL"));
+        assert!(sql.contains("id_file BIGSERIAL"));
+        assert!(sql.contains("file_id BIGINT NOT NULL REFERENCES files(id_file)"));
         assert!(!sql.contains("idx_data_blocks_data_object_id"));
     }
 

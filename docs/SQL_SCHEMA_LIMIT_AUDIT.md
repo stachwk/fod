@@ -20,7 +20,7 @@ historycznych oraz dynamicznym SQL używanym przez Rust.
 | UID/GID, `journal.id_user` i numery urządzeń `rdev_*` | `BIGINT` z zakresem `0..=2^32-1` | FUSE przekazuje te wartości jako `u32`. PostgreSQL `INTEGER` był signed i nie mieścił górnej połowy domeny. Schema 34 zachowuje pełny zakres przez `BIGINT` i sprawdza granice `u32`. |
 | Kolejność bloku `data_blocks._order` i `copy_block_crc._order` | `BIGINT NOT NULL` plus `CHECK (>= 0)` | Rust używa `u64` dla indeksu bloku, a plik może mieć rozmiar `BIGINT`; poprzedni signed `INTEGER` ograniczał indeks do `2^31-1`. Schema 34 rozszerza typ i odrzuca indeksy ujemne. |
 | Liczniki referencji, grup i zadań indeksatora | `BIGINT` plus ograniczenia nieujemności | Rust przechowuje je jako `u64`; `INTEGER` ograniczał je do `2^31-1`. Schema 34 poszerza `reference_count`, `file_count` oraz liczniki planów importu. PostgreSQL `BIGINT` nadal ma maksimum `2^63-1`, więc wartości `u64` powyżej tej granicy nie są obsługiwane. |
-| Klucze `SERIAL` i relacyjne kolumny `INTEGER` | `SERIAL`/`INTEGER` | Pozostają signed 32-bit; pojedyncza tabela może osiągnąć maksymalnie `2^31-1` automatycznych identyfikatorów. Konwersja wymaga wspólnej migracji kluczy głównych i wszystkich kluczy obcych, więc pozostaje osobną decyzją. |
+| Identyfikatory obiektów i indeksatora oraz ich referencje | `BIGSERIAL`/`BIGINT` | Schema 37 poszerza klucze i 45 kolumn z grafu identyfikatorów; zachowuje definicje FK i triggerów w trakcie zmiany oraz poszerza sekwencje `SERIAL`. Maksimum auto-ID to signed `BIGINT` (`2^63-1`), nie pełne `u64`. Nie-ID `INTEGER` pozostają węższe, gdy ich domena tego wymaga. |
 | `mode` w plikach i katalogach | `VARCHAR(6)` oraz `CHECK` formatu oktalnego `0..07777` | Schema 36 normalizuje historyczne wartości pełnego `st_mode` po sprawdzeniu, czy bity typu pasują do tabeli, i dodaje warunki walidujące. `VARCHAR(6)` pozostaje dla kompatybilnej reprezentacji tekstowej; limit nie służy oszczędzaniu miejsca. |
 | `symlinks.target`, ścieżki i korzenie źródeł indeksatora, ścieżka mountu, filtr źródeł, komunikaty błędów | `TEXT` | Zmienna długość jest częścią domeny tych danych. `TEXT` nie rezerwuje maksymalnej długości; PostgreSQL przechowuje rzeczywistą wartość i może kompresować duże wartości. Nie zastępować arbitralnym `VARCHAR(n)`. |
 | `inode_seed`, tokeny żądań (także tabele lease/session tworzone przez dynamiczny SQL) | `TEXT` | Wartości są generowane przez FOD i/lub kod wywołujący; wymagają ewentualnie osobnego limitu kontraktu, ale `VARCHAR(n)` nie zmniejszy zajętości dla tych samych danych. |
@@ -52,14 +52,61 @@ przypadki i sprawdza wynik `644`/`755`. Baza aktywna pozostała nietknięta.
 
 ## Granice i dalsze decyzje
 
-Weryfikacja `SERIAL`/`INTEGER` dla identyfikatorów inode/obiektów oraz potrzeby
-obsługi liczników `u64` większych niż `i64::MAX` pozostają otwarte. Nie należy
-zmieniać typów identyfikatorów bez wspólnej migracji wszystkich
-kluczy głównych i obcych oraz sprawdzenia serializacji i istniejących danych.
-Identyfikatory SQL pozostają do audytu. Reprezentacja `mode` ma już walidację
-oraz migrację danych historycznych. Te pozycje są zapisane w
-[`TODO.md`](../TODO.md); audyt nie certyfikuje pełnej zgodności POSIX ani
-wszystkich wejść SQL.
+Schema 37 zamyka ograniczenie identyfikatorów do signed 32-bit. Osobną granicą
+pozostaje signed `BIGINT`: liczniki reprezentowane w Rust jako `u64` nie
+obsługują w SQL wartości powyżej `i64::MAX`. Przed zmianą takich liczników
+trzeba wykazać, że przekroczenie jest częścią wymaganego kontraktu; samo `u64`
+w kodzie nie dowodzi potrzeby `NUMERIC(20,0)`. Reprezentacja `mode` ma
+walidację i migrację danych historycznych. Audyt nie certyfikuje pełnej
+zgodności POSIX ani wszystkich wejść SQL.
+
+### Audyt zakresu identyfikatorów — odczytowy snapshot
+
+`rust_hotpath/src/pg/namespace_lookup.rs` parsuje identyfikatory do `u64`, a
+publiczne metody repozytorium, FFI i modele indeksatora również używają `u64`.
+To nie usuwa ograniczenia SQL: `SERIAL` oraz odpowiadające mu `INTEGER` kończą
+się na `2^31-1`. Wstawienie kolejnego wiersza po wyczerpaniu sekwencji zakończy
+się błędem PostgreSQL, nawet jeśli FOD potrafi przechować większy identyfikator.
+
+Odczytowy katalog bazy `foddbname` z 2026-10-31 wskazał schema 31. Główne
+sekwencje miały wtedy wartości: katalogi 1 572, pliki 3 314, obiekty danych
+8 924, bloki danych 24 280, hardlinki 449, symlinki 622 i wpisy dziennika
+7 026. Tabele indeksatora były puste albo miały sekwencje poniżej 6. Są to
+wartości jednej lokalnej bazy, nie gwarancja o innych wdrożeniach. Nie wskazują
+na bliskie wyczerpanie, ale nie zmieniają twardej granicy ani nie uwzględniają
+historycznych wierszy usuniętych z tabel, ponieważ sekwencje są monotoniczne.
+Baza pozostała bez zmian.
+
+Katalog PostgreSQL pokazał 24 relacje FK prowadzące do identyfikatorów FOD i
+indeksatora. Graf obejmuje m.in. `directories` → `files`, `hardlinks`,
+`symlinks` i `journal`; `files` → `special_files`, `hardlinks`, lease'y,
+tokeny żądań i `journal`; `data_objects` → `files`, `data_blocks`, CRC oraz
+tokeny; a także źródła/skany/pliki/plany/snapshoty indeksatora. Oprócz FK
+identyfikatory są przechowywane w kolumnie polimorficznej `xattrs.owner_id`
+oraz w referencjach snapshotu indeksatora, które nie mają FK. Z kolei pola
+takie jak `schema_number`, `lock_type`, `password_iterations`, UID/GID i
+`rdev` są `INTEGER`, ale nie należą do grafu kluczy identyfikujących obiekty;
+nie należy ich poszerzać tylko na podstawie wyszukiwania tekstu `INTEGER`.
+
+Tekstowe `COPY` indeksatora serializuje identyfikatory z Rust `u64`; payload
+bloków używa binarnych pól PostgreSQL `BIGINT`. Schema 37 zmienia wszystkie 45
+kolumn z grafu identyfikatorów i poszerza 17 sekwencji `SERIAL`; trzy pozostałe
+sekwencje były już `BIGSERIAL`. Migracja zachowuje FK i triggery, a test upgrade z wersji 1
+sprawdza typy kolumn, zakres sekwencji oraz odtworzenie 29 FK i 7 triggerów.
+Świeży schemat, runtime DDL dla tabel locków i upgrade używają teraz
+`BIGSERIAL`/`BIGINT`. `INTEGER` pozostał m.in. dla `schema_number`, stałego
+`schema_admin.id`, `password_iterations`, `lock_type` i `lock_pid`.
+
+Pierwszy upgrade test wykazał, że PostgreSQL blokuje zmianę
+`directories.id_parent` przy aktywnym triggerze czasu katalogu. Migracja 37
+zapisuje definicje FK i triggerów użytkownika schematu FOD, usuwa je w
+transakcji, zmienia typy, a następnie odtwarza; regresja sprawdza liczbę FK i
+triggerów po upgrade.
+
+Zmiana typu wymaga blokad i może przepisać kolumny oraz indeksy; przed
+upgradem produkcyjnej bazy należy użyć pełnego maintenance window i ocenić
+czas na jej rzeczywistym rozmiarze. Test wykonał migrację wyłącznie na
+izolowanej bazie. Odczytowy snapshot schema 31 nie był modyfikowany.
 
 ## Wniosek dla `TEXT` i `VARCHAR`
 

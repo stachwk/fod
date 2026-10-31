@@ -7284,7 +7284,7 @@ impl DbRepo {
                         CString::new(
                             "
                             CREATE TABLE IF NOT EXISTS lock_leases (
-                                id_lock SERIAL PRIMARY KEY,
+                                id_lock BIGSERIAL PRIMARY KEY,
                                 resource_kind VARCHAR(20) NOT NULL,
                                 resource_id BIGINT NOT NULL,
                                 session_id BIGINT NOT NULL DEFAULT 0,
@@ -7407,7 +7407,7 @@ impl DbRepo {
                         CString::new(
                             "
                             CREATE TABLE IF NOT EXISTS lock_range_leases (
-                                id_lock SERIAL PRIMARY KEY,
+                                id_lock BIGSERIAL PRIMARY KEY,
                                 resource_kind VARCHAR(20) NOT NULL,
                                 resource_id BIGINT NOT NULL,
                                 session_id BIGINT NOT NULL DEFAULT 0,
@@ -15196,7 +15196,7 @@ mod tests {
         let lock_table_sql = std::ffi::CString::new(
             "
             CREATE TABLE IF NOT EXISTS lock_leases (
-                id_lock SERIAL PRIMARY KEY
+                id_lock BIGSERIAL PRIMARY KEY
             )
             ",
         )

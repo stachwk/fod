@@ -14,6 +14,7 @@ long-term proposals belong in [ROADMAP.md](../../ROADMAP.md).
 | 4 | Degraded read-only recovery | The [HA implementation plan](HA_READONLY_RECOVERY_AND_CACHE.md) owns the detailed phases and acceptance matrix. Explicit standby reads and role monitoring exist; live source switching, fencing proof validation and rejoin barriers remain open. Use controlled remount until those barriers are complete. |
 | 5 | Controlled cache performance comparison | Follow the performance workstream in the [HA/cache plan](HA_READONLY_RECOVERY_AND_CACHE.md#workstream-b-cache-and-historical-performance-comparison), after the relevant correctness gates. Existing five-run pilot measurements are diagnostic evidence, not a release baseline. |
 | 6 | Quantify clock-skew and queue-order evidence | The [time requirements](../POSTGRESQL_REQUIREMENTS.md#3-synchronizacja-czasu-hostów) require monitored NTP synchronization. The shortest effective lock lease is 1 s; validate 100 ms inter-node offset as a candidate against PostgreSQL failover and fencing before adopting a numeric limit. FIFO tickets order waiters within each process, but production telemetry does not correlate tickets with task identities. If historical task order must be diagnosed, add ticket/task correlation locally and authoritative transaction-order evidence across hosts; wall-clock log sorting is insufficient. |
+| 7 | Decide whether any counters need unsigned values beyond signed `BIGINT` | Entity IDs are now `BIGINT`/`BIGSERIAL` through schema 37. PostgreSQL remains signed; only consider `NUMERIC(20,0)` or another representation if a supported FOD contract needs counters above `i64::MAX`. Evidence and domain limits: [SQL schema limit audit](../SQL_SCHEMA_LIMIT_AUDIT.md), [TODO](../../TODO.md). |
 
 These priorities do not imply a diagnosed root cause beyond the evidence in
 the linked reviews. Recheck source and existing regressions before choosing a
@@ -89,5 +90,10 @@ type bits, then constrains file and directory modes to octal permission and
 special bits. A read-only scan of the active schema 31 database found 800
 affected file rows; the live database was not changed. The isolated schema
 upgrade regression seeds legacy file/directory values before upgrading. The
-open SQL-schema task is now the 32-bit `SERIAL`/`INTEGER` identifier graph and
-whether signed `BIGINT` counters need any wider domain.
+schema 37 widened all 45 entity ID/reference columns and 17 `SERIAL` sequences
+to `BIGINT`, preserving 29 foreign keys and 7 triggers; fresh schema and
+runtime lock-table DDL agree. Its schema-upgrade regression passes on an
+isolated database. No production migration was run. Before upgrading a real
+database, schedule a maintenance window for the column/index locks and
+rewrites. The remaining SQL-domain question is whether any counter truly needs
+unsigned values above signed `BIGINT`.

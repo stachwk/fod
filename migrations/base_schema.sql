@@ -3,8 +3,8 @@ CREATE SCHEMA IF NOT EXISTS fod;
 SET search_path TO fod, public;
 
 CREATE TABLE IF NOT EXISTS directories (
-    id_directory SERIAL PRIMARY KEY,
-    id_parent INTEGER REFERENCES directories(id_directory),
+    id_directory BIGSERIAL PRIMARY KEY,
+    id_parent BIGINT REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT directories_name_octet_length_check CHECK (octet_length(name) <= 255),
     mode VARCHAR(6) NOT NULL
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS directories (
 );
 
 CREATE TABLE IF NOT EXISTS data_objects (
-    id_data_object SERIAL PRIMARY KEY,
+    id_data_object BIGSERIAL PRIMARY KEY,
     file_size BIGINT NOT NULL DEFAULT 0
         CONSTRAINT data_objects_file_size_nonnegative_check CHECK (file_size >= 0),
     content_hash BYTEA,
@@ -30,10 +30,10 @@ CREATE TABLE IF NOT EXISTS data_objects (
 );
 
 CREATE TABLE IF NOT EXISTS files (
-    id_file SERIAL PRIMARY KEY,
-    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object),
+    id_file BIGSERIAL PRIMARY KEY,
+    data_object_id BIGINT NOT NULL REFERENCES data_objects(id_data_object),
     content_generation BIGINT NOT NULL DEFAULT 1,
-    id_directory INTEGER REFERENCES directories(id_directory),
+    id_directory BIGINT REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT files_name_octet_length_check CHECK (octet_length(name) <= 255),
     size BIGINT NOT NULL CONSTRAINT files_size_nonnegative_check CHECK (size >= 0),
@@ -76,7 +76,7 @@ FOR EACH ROW
 EXECUTE FUNCTION fod_bump_file_content_generation();
 
 CREATE TABLE IF NOT EXISTS special_files (
-    id_file INTEGER PRIMARY KEY REFERENCES files(id_file) ON DELETE CASCADE,
+    id_file BIGINT PRIMARY KEY REFERENCES files(id_file) ON DELETE CASCADE,
     file_type VARCHAR(10) NOT NULL,
     rdev_major BIGINT NOT NULL DEFAULT 0
         CONSTRAINT special_files_rdev_major_u32_check CHECK (rdev_major BETWEEN 0 AND 4294967295),
@@ -85,9 +85,9 @@ CREATE TABLE IF NOT EXISTS special_files (
 );
 
 CREATE TABLE IF NOT EXISTS hardlinks (
-    id_hardlink SERIAL PRIMARY KEY,
-    id_file INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
-    id_directory INTEGER REFERENCES directories(id_directory),
+    id_hardlink BIGSERIAL PRIMARY KEY,
+    id_file BIGINT NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
+    id_directory BIGINT REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT hardlinks_name_octet_length_check CHECK (octet_length(name) <= 255),
     uid BIGINT NOT NULL CONSTRAINT hardlinks_uid_u32_check CHECK (uid BETWEEN 0 AND 4294967295),
@@ -99,8 +99,8 @@ CREATE TABLE IF NOT EXISTS hardlinks (
 );
 
 CREATE TABLE IF NOT EXISTS symlinks (
-    id_symlink SERIAL PRIMARY KEY,
-    id_parent INTEGER REFERENCES directories(id_directory),
+    id_symlink BIGSERIAL PRIMARY KEY,
+    id_parent BIGINT REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL
         CONSTRAINT symlinks_name_octet_length_check CHECK (octet_length(name) <= 255),
     target TEXT NOT NULL,
@@ -114,8 +114,8 @@ CREATE TABLE IF NOT EXISTS symlinks (
 );
 
 CREATE TABLE IF NOT EXISTS data_blocks (
-    id_block SERIAL PRIMARY KEY,
-    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
+    id_block BIGSERIAL PRIMARY KEY,
+    data_object_id BIGINT NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
     _order BIGINT NOT NULL CONSTRAINT data_blocks_order_nonnegative_check CHECK (_order >= 0),
     data BYTEA NOT NULL
 );
@@ -142,18 +142,18 @@ CREATE TABLE IF NOT EXISTS schema_admin (
 );
 
 CREATE TABLE IF NOT EXISTS journal (
-    id_entry SERIAL PRIMARY KEY,
+    id_entry BIGSERIAL PRIMARY KEY,
     id_user BIGINT CONSTRAINT journal_user_u32_check CHECK (id_user BETWEEN 0 AND 4294967295),
-    id_directory INTEGER REFERENCES directories(id_directory) ON DELETE SET NULL,
-    id_file INTEGER REFERENCES files(id_file) ON DELETE SET NULL,
+    id_directory BIGINT REFERENCES directories(id_directory) ON DELETE SET NULL,
+    id_file BIGINT REFERENCES files(id_file) ON DELETE SET NULL,
     action TEXT NOT NULL,
     date_time TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS xattrs (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     owner_kind VARCHAR(20) NOT NULL,
-    owner_id INTEGER NOT NULL,
+    owner_id BIGINT NOT NULL,
     name VARCHAR(255) NOT NULL
         CONSTRAINT xattrs_name_octet_length_check CHECK (octet_length(name) <= 255),
     value BYTEA NOT NULL,
@@ -161,7 +161,7 @@ CREATE TABLE IF NOT EXISTS xattrs (
 );
 
 CREATE TABLE IF NOT EXISTS lock_leases (
-    id_lock SERIAL PRIMARY KEY,
+    id_lock BIGSERIAL PRIMARY KEY,
     resource_kind VARCHAR(20) NOT NULL,
     resource_id BIGINT NOT NULL,
     owner_key NUMERIC(20,0) NOT NULL,
@@ -205,7 +205,7 @@ CREATE INDEX IF NOT EXISTS idx_lock_leases_resource ON lock_leases (resource_kin
 CREATE INDEX IF NOT EXISTS idx_lock_leases_expires ON lock_leases (lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS lock_range_leases (
-    id_lock SERIAL PRIMARY KEY,
+    id_lock BIGSERIAL PRIMARY KEY,
     resource_kind VARCHAR(20) NOT NULL,
     resource_id BIGINT NOT NULL,
     owner_key NUMERIC(20,0) NOT NULL,
@@ -241,7 +241,7 @@ CREATE INDEX IF NOT EXISTS idx_lock_wait_edges_blocked
     ON lock_wait_edges (blocked_host_name, blocked_pid, lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS copy_block_crc (
-    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
+    data_object_id BIGINT NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
     _order BIGINT NOT NULL CONSTRAINT copy_block_crc_order_nonnegative_check CHECK (_order >= 0),
     crc32 BIGINT NOT NULL,
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -250,14 +250,14 @@ CREATE TABLE IF NOT EXISTS copy_block_crc (
 
 CREATE TABLE IF NOT EXISTS data_object_request_tokens (
     request_token TEXT PRIMARY KEY,
-    id_data_object INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
+    id_data_object BIGINT NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS hardlink_promotion_request_tokens (
     request_token TEXT PRIMARY KEY,
-    id_file INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
+    id_file BIGINT NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
     did_promote BOOLEAN NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -276,7 +276,7 @@ CREATE INDEX IF NOT EXISTS idx_payload_capacity_reservations_expires
 CREATE INDEX IF NOT EXISTS idx_files_data_object_id ON files (data_object_id);
 
 CREATE TABLE IF NOT EXISTS index_sources (
-    id_index_source SERIAL PRIMARY KEY,
+    id_index_source BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     kind TEXT NOT NULL,
     root_path TEXT NOT NULL,
@@ -285,8 +285,8 @@ CREATE TABLE IF NOT EXISTS index_sources (
 );
 
 CREATE TABLE IF NOT EXISTS index_scan_runs (
-    id_scan_run SERIAL PRIMARY KEY,
-    id_index_source INTEGER NOT NULL REFERENCES index_sources(id_index_source) ON DELETE CASCADE,
+    id_scan_run BIGSERIAL PRIMARY KEY,
+    id_index_source BIGINT NOT NULL REFERENCES index_sources(id_index_source) ON DELETE CASCADE,
     started_at TIMESTAMP NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMP,
     status TEXT NOT NULL,
@@ -296,9 +296,9 @@ CREATE TABLE IF NOT EXISTS index_scan_runs (
 );
 
 CREATE TABLE IF NOT EXISTS index_files (
-    id_file SERIAL PRIMARY KEY,
-    id_index_source INTEGER NOT NULL REFERENCES index_sources(id_index_source) ON DELETE CASCADE,
-    id_scan_run INTEGER REFERENCES index_scan_runs(id_scan_run) ON DELETE SET NULL,
+    id_file BIGSERIAL PRIMARY KEY,
+    id_index_source BIGINT NOT NULL REFERENCES index_sources(id_index_source) ON DELETE CASCADE,
+    id_scan_run BIGINT REFERENCES index_scan_runs(id_scan_run) ON DELETE SET NULL,
     path TEXT NOT NULL,
     size BIGINT NOT NULL CONSTRAINT index_files_size_nonnegative_check CHECK (size >= 0),
     mtime_ns BIGINT,
@@ -317,7 +317,7 @@ CREATE INDEX IF NOT EXISTS idx_index_files_source_path_md5
     ON index_files (id_index_source, md5(path));
 
 CREATE TABLE IF NOT EXISTS index_file_hashes (
-    id_file INTEGER PRIMARY KEY REFERENCES index_files(id_file) ON DELETE CASCADE,
+    id_file BIGINT PRIMARY KEY REFERENCES index_files(id_file) ON DELETE CASCADE,
     hash_algorithm TEXT NOT NULL,
     partial_hash BYTEA,
     full_hash BYTEA,
@@ -332,7 +332,7 @@ CREATE TABLE IF NOT EXISTS index_file_hashes (
 );
 
 CREATE TABLE IF NOT EXISTS index_duplicate_sets (
-    id_duplicate_set SERIAL PRIMARY KEY,
+    id_duplicate_set BIGSERIAL PRIMARY KEY,
     hash_algorithm TEXT NOT NULL,
     full_hash BYTEA NOT NULL,
     file_size BIGINT NOT NULL
@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS index_duplicate_sets (
 );
 
 CREATE TABLE IF NOT EXISTS index_import_plans (
-    id_import_plan SERIAL PRIMARY KEY,
+    id_import_plan BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     status TEXT NOT NULL,
@@ -369,12 +369,12 @@ CREATE TABLE IF NOT EXISTS index_import_plans (
 );
 
 CREATE TABLE IF NOT EXISTS index_import_plan_entries (
-    id_import_plan_entry SERIAL PRIMARY KEY,
-    id_import_plan INTEGER NOT NULL REFERENCES index_import_plans(id_import_plan) ON DELETE CASCADE,
-    id_file INTEGER NOT NULL REFERENCES index_files(id_file) ON DELETE CASCADE,
-    id_duplicate_set INTEGER REFERENCES index_duplicate_sets(id_duplicate_set) ON DELETE SET NULL,
+    id_import_plan_entry BIGSERIAL PRIMARY KEY,
+    id_import_plan BIGINT NOT NULL REFERENCES index_import_plans(id_import_plan) ON DELETE CASCADE,
+    id_file BIGINT NOT NULL REFERENCES index_files(id_file) ON DELETE CASCADE,
+    id_duplicate_set BIGINT REFERENCES index_duplicate_sets(id_duplicate_set) ON DELETE SET NULL,
     action TEXT NOT NULL,
-    canonical_file_id INTEGER REFERENCES index_files(id_file),
+    canonical_file_id BIGINT REFERENCES index_files(id_file),
     logical_path TEXT NOT NULL,
     source_path TEXT NOT NULL,
     size BIGINT NOT NULL CONSTRAINT index_import_plan_entries_size_nonnegative_check CHECK (size >= 0),
@@ -475,7 +475,7 @@ CREATE INDEX IF NOT EXISTS idx_destination_write_leases_expires
 
 CREATE TABLE IF NOT EXISTS file_write_leases (
     fencing_token BIGSERIAL PRIMARY KEY,
-    file_id INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
+    file_id BIGINT NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
     session_id BIGINT NOT NULL REFERENCES client_sessions(session_id) ON DELETE CASCADE,
     owner_key NUMERIC(20,0) NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
@@ -492,7 +492,7 @@ CREATE INDEX IF NOT EXISTS idx_file_write_leases_expires
     ON file_write_leases (lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS file_open_leases (
-    file_id INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
+    file_id BIGINT NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
     session_id BIGINT NOT NULL REFERENCES client_sessions(session_id) ON DELETE CASCADE,
     handle_id NUMERIC(20,0) NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
@@ -622,7 +622,7 @@ ALTER TABLE IF EXISTS lock_range_leases
     ALTER COLUMN session_id DROP DEFAULT;
 
 CREATE TABLE IF NOT EXISTS index_catalog_snapshots (
-    id_catalog_snapshot SERIAL PRIMARY KEY,
+    id_catalog_snapshot BIGSERIAL PRIMARY KEY,
     request_token TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
     source_filter TEXT,
@@ -635,10 +635,10 @@ CREATE TABLE IF NOT EXISTS index_catalog_snapshots (
 );
 
 CREATE TABLE IF NOT EXISTS index_catalog_snapshot_files (
-    id_catalog_snapshot INTEGER NOT NULL
+    id_catalog_snapshot BIGINT NOT NULL
         REFERENCES index_catalog_snapshots(id_catalog_snapshot) ON DELETE CASCADE,
-    id_file INTEGER NOT NULL,
-    id_index_source INTEGER NOT NULL,
+    id_file BIGINT NOT NULL,
+    id_index_source BIGINT NOT NULL,
     source_name TEXT NOT NULL,
     source_kind TEXT NOT NULL,
     source_root TEXT NOT NULL,
@@ -653,7 +653,7 @@ CREATE TABLE IF NOT EXISTS index_catalog_snapshot_files (
     hash_algorithm TEXT,
     full_hash BYTEA,
     hash_status TEXT,
-    id_scan_run INTEGER,
+    id_scan_run BIGINT,
     file_created_at TIMESTAMP NOT NULL,
     file_updated_at TIMESTAMP NOT NULL,
     PRIMARY KEY (id_catalog_snapshot, id_file)

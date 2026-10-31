@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 36;
+const SCHEMA_VERSION: u64 = 37;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -398,6 +398,102 @@ fn assert_latest_payload_schema(conn: &DbConn) {
         )
         .expect("inspect payload ownership schema");
     assert!(matches, "payload tables must be owned by data objects");
+
+    let widened_id_columns = conn
+        .query_scalar_u64(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = 'fod'
+               AND data_type = 'bigint'
+               AND (table_name, column_name) IN (
+                   ('directories', 'id_directory'), ('directories', 'id_parent'),
+                   ('data_objects', 'id_data_object'),
+                   ('files', 'id_file'), ('files', 'data_object_id'), ('files', 'id_directory'),
+                   ('special_files', 'id_file'),
+                   ('hardlinks', 'id_hardlink'), ('hardlinks', 'id_file'), ('hardlinks', 'id_directory'),
+                   ('symlinks', 'id_symlink'), ('symlinks', 'id_parent'),
+                   ('data_blocks', 'id_block'), ('data_blocks', 'data_object_id'),
+                   ('copy_block_crc', 'data_object_id'),
+                   ('data_object_request_tokens', 'id_data_object'),
+                   ('hardlink_promotion_request_tokens', 'id_file'),
+                   ('file_open_leases', 'file_id'), ('file_write_leases', 'file_id'),
+                   ('journal', 'id_entry'), ('journal', 'id_directory'), ('journal', 'id_file'),
+                   ('xattrs', 'id'), ('xattrs', 'owner_id'),
+                   ('lock_leases', 'id_lock'), ('lock_range_leases', 'id_lock'),
+                   ('index_sources', 'id_index_source'),
+                   ('index_scan_runs', 'id_scan_run'), ('index_scan_runs', 'id_index_source'),
+                   ('index_files', 'id_file'), ('index_files', 'id_index_source'), ('index_files', 'id_scan_run'),
+                   ('index_file_hashes', 'id_file'),
+                   ('index_duplicate_sets', 'id_duplicate_set'),
+                   ('index_import_plans', 'id_import_plan'),
+                   ('index_import_plan_entries', 'id_import_plan_entry'),
+                   ('index_import_plan_entries', 'id_import_plan'),
+                   ('index_import_plan_entries', 'id_file'),
+                   ('index_import_plan_entries', 'id_duplicate_set'),
+                   ('index_import_plan_entries', 'canonical_file_id'),
+                   ('index_catalog_snapshots', 'id_catalog_snapshot'),
+                   ('index_catalog_snapshot_files', 'id_catalog_snapshot'),
+                   ('index_catalog_snapshot_files', 'id_file'),
+                   ('index_catalog_snapshot_files', 'id_index_source'),
+                   ('index_catalog_snapshot_files', 'id_scan_run')
+               )",
+        )
+        .expect("count widened identifier columns")
+        .expect("identifier column count");
+    assert_eq!(widened_id_columns, 45);
+
+    let widened_sequences = conn
+        .query_scalar_u64(
+            "SELECT COUNT(*) FROM pg_sequences
+             WHERE schemaname = 'fod' AND max_value = 9223372036854775807",
+        )
+        .expect("count widened serial sequences")
+        .expect("sequence count");
+    assert_eq!(widened_sequences, 20);
+
+    let preserved_foreign_keys = conn
+        .query_scalar_u64(
+            "SELECT COUNT(*) FROM pg_constraint
+             WHERE contype = 'f' AND connamespace = 'fod'::regnamespace",
+        )
+        .expect("count restored schema foreign keys")
+        .expect("foreign key count");
+    assert_eq!(preserved_foreign_keys, 29);
+
+    let preserved_triggers = conn
+        .query_scalar_u64(
+            "SELECT COUNT(*) FROM pg_trigger tg
+             JOIN pg_class cls ON cls.oid = tg.tgrelid
+             WHERE cls.relnamespace = 'fod'::regnamespace
+               AND NOT tg.tgisinternal",
+        )
+        .expect("count restored schema triggers")
+        .expect("trigger count");
+    assert_eq!(preserved_triggers, 7);
+
+    conn.exec("BEGIN; SAVEPOINT bigint_identifier_probe")
+        .expect("begin bigint identifier probe");
+    conn.exec(
+        "INSERT INTO fod.data_objects
+             (id_data_object, file_size, content_hash, reference_count, creation_date, modification_date)
+         VALUES (2147483648, 0, NULL, 1, NOW(), NOW());
+         INSERT INTO fod.files
+             (id_file, data_object_id, id_directory, name, size, mode, uid, gid, inode_seed,
+              modification_date, access_date, change_date, creation_date)
+         VALUES (2147483649, 2147483648, NULL, 'bigint-id-probe', 0, '644', 0, 0,
+                 'bigint-id-probe', NOW(), NOW(), NOW(), NOW());",
+    )
+    .expect("SQL identity and FK columns must accept values above signed 32-bit range");
+    let widened_fk_value = conn
+        .query_scalar_text(
+            "SELECT f.id_file::text || ':' || f.data_object_id::text
+             FROM fod.files f WHERE f.id_file = 2147483649",
+        )
+        .expect("read bigint identifier probe")
+        .expect("bigint identifier probe row");
+    assert_eq!(widened_fk_value, "2147483649:2147483648");
+    conn.exec("ROLLBACK TO SAVEPOINT bigint_identifier_probe; COMMIT")
+        .expect("rollback bigint identifier probe");
 
     assert_sql_name_byte_limit(conn);
     assert_sql_u32_uid_range(conn);
@@ -1038,10 +1134,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 36",
+        "FOD schema version: 37",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 36",
+        "Latest migration version: 37",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -1081,6 +1177,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0034: 0034_align_numeric_column_ranges.sql",
         "0035: 0035_hash_long_indexer_paths.sql",
         "0036: 0036_normalize_posix_mode_values.sql",
+        "0037: 0037_widen_entity_identifiers.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -1282,10 +1379,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 36",
+        "Latest migration version: 37",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -1456,7 +1553,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 36"),
+        status_before_text.contains("Latest migration version: 37"),
         "{status_before_text}"
     );
     assert!(
@@ -1469,7 +1566,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     );
     assert!(
         status_before_text.contains(
-            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036"
+            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037"
         ),
         "{status_before_text}"
     );
@@ -1518,7 +1615,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 36"),
+        status_broken_text.contains("FOD schema version: 37"),
         "{status_broken_text}"
     );
     assert!(

@@ -35,13 +35,23 @@ Reading guide:
   upgrade, bo były w niej aktywne sesje FOD; nie zmieniano tej bazy. Zmiana
   `TEXT` na `VARCHAR(n)` nie rozwiązuje problemu.
 
-- [ ] **Dokończyć audyt szerokości identyfikatorów SQL.** Klucze `SERIAL` i
-  relacyjne `INTEGER` nadal ograniczają zakres signed 32-bit. Przed decyzją o
-  migracji ustalić rzeczywiste zużycie identyfikatorów, prześledzić pełny graf
-  kluczy głównych i obcych oraz reprezentacje po stronie Rust/FUSE. `BIGINT`
-  pozostaje signed, mimo że część liczników Rust jest `u64`; ocenić osobno, czy
-  kontrakt wymaga wartości ponad `i64::MAX`. Nie zmieniać typów bez wspólnego
-  planu migracji i sprawdzenia danych.
+- [x] **Poszerzyć graf identyfikatorów SQL.** Rust/FUSE i indeksator używały
+  `u64`, podczas gdy `SERIAL`/`INTEGER` zatrzymywały auto-ID na `2^31-1`.
+  Schema 37 zmienia 45 kolumn identyfikatorów/referencji na `BIGINT` i 17
+  sekwencji na zakres signed 64-bit; zachowuje 29 FK oraz 7 triggerów.
+  Regresja upgrade z wersji 1 weryfikuje typy, maksimum sekwencji i zachowane
+  ograniczenia. Odczyt schema 31 z 2026-10-31 wykazał 24 FK w grafie i
+  dodatkowe referencje bez FK (`xattrs.owner_id`, snapshot indeksatora); stan
+  lokalny był daleko od limitu, ale nie wyznacza limitu innych wdrożeń.
+  Produkcyjnego upgrade nie wykonywałem. Wymagane jest okno serwisowe, bo
+  zmiana typów może blokować i przepisywać indeksy. Szczegóły i wyniki są w
+  `docs/SQL_SCHEMA_LIMIT_AUDIT.md`.
+
+- [ ] **Ocenić potrzebę liczników poza signed `BIGINT`.** PostgreSQL `BIGINT`
+  nie reprezentuje pełnej domeny Rust `u64`. Wrócić do `NUMERIC(20,0)` lub
+  innego formatu dopiero po wykazaniu, że kontrakt FOD wymaga wartości powyżej
+  `i64::MAX`; same typy Rust nie są takim dowodem. Rozmiary plików pozostają
+  ograniczone do signed `BIGINT` zgodnie z `off_t`.
 
 - [x] **Znormalizować tryby POSIX i walidować je w SQL.** Odczytowy audyt bazy
   schema 31 znalazł 800 plików z historycznie zapisanym pełnym `st_mode`;
