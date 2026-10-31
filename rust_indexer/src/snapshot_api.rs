@@ -1,6 +1,9 @@
 use crate::db::sql_quote_literal;
 use crate::file_read_api;
-use crate::model::{parse_postgres_bool, require_exact_row_columns, require_single_exact_row};
+use crate::model::{
+    parse_optional_positive_u64, parse_positive_u64, parse_postgres_bool,
+    require_exact_row_columns, require_single_exact_row,
+};
 use crate::output::{
     CommandCapabilityView, IndexerCapabilitiesOutput, INDEXER_DEFAULT_PAGE_LIMIT,
     INDEXER_MAX_PAGE_LIMIT,
@@ -619,12 +622,12 @@ fn normalize_source_filter(source: Option<&str>) -> Result<Option<String>, Strin
 fn snapshot_from_row(row: &[String]) -> Result<CatalogSnapshotView, String> {
     require_exact_row_columns(row, 7, "catalog snapshot")?;
     Ok(CatalogSnapshotView {
-        snapshot_id: parse_u64(&row[0], "catalog snapshot id")?,
+        snapshot_id: parse_positive_u64(&row[0], "catalog snapshot ID")?,
         status: row[1].clone(),
         source_filter: optional_text(&row[2]),
         file_count: parse_u64(&row[3], "catalog snapshot file count")?,
         total_bytes: parse_u64(&row[4], "catalog snapshot total bytes")?,
-        max_file_id: parse_optional_u64(&row[5], "catalog snapshot max file id")?,
+        max_file_id: parse_optional_positive_u64(&row[5], "catalog snapshot max file ID")?,
         created_at: row[6].clone(),
     })
 }
@@ -1022,8 +1025,8 @@ fn snapshot_file_item_from_row(row: &[String]) -> Result<crate::read_api::FileCa
         .display()
         .to_string();
     Ok(crate::read_api::FileCatalogItem {
-        file_id: parse_u64(&row[0], "file id")?,
-        source_id: parse_u64(&row[1], "source id")?,
+        file_id: parse_positive_u64(&row[0], "file ID")?,
+        source_id: parse_positive_u64(&row[1], "source ID")?,
         source_name: row[2].clone(),
         source_kind: row[3].clone(),
         source_root,
@@ -1041,7 +1044,7 @@ fn snapshot_file_item_from_row(row: &[String]) -> Result<crate::read_api::FileCa
         hash_algorithm: optional_text(&row[13]),
         full_hash_hex: optional_text(&row[14]),
         hash_status: optional_text(&row[15]),
-        scan_run_id: parse_optional_u64(&row[16], "scan run id")?,
+        scan_run_id: parse_optional_positive_u64(&row[16], "scan run ID")?,
         created_at: row[17].clone(),
         updated_at: row[18].clone(),
     })

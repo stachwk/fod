@@ -1,4 +1,4 @@
-use crate::model::{require_exact_row_columns, require_single_exact_row};
+use crate::model::{parse_positive_u64, require_exact_row_columns, require_single_exact_row};
 use crate::output::{IndexerCapabilitiesOutput, INDEXER_MAX_PAGE_LIMIT};
 use crate::read_api;
 use fod_rust_hotpath::pg::DbRepo;
@@ -148,7 +148,7 @@ fn validate_duplicate_set_list_request(limit: usize, cursor: Option<u64>) -> Res
 fn duplicate_set_list_item_from_row(row: &[String]) -> Result<DuplicateSetListItem, String> {
     require_exact_row_columns(row, 8, "duplicate-set list")?;
     Ok(DuplicateSetListItem {
-        duplicate_set_id: parse_u64(&row[0], "duplicate-set id")?,
+        duplicate_set_id: parse_positive_u64(&row[0], "duplicate-set ID")?,
         hash_algorithm: row[1].clone(),
         full_hash_hex: row[2].clone(),
         file_size: parse_u64(&row[3], "duplicate-set file size")?,

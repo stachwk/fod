@@ -2519,3 +2519,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   in `symlink_id_for_hardlink_entry()`. The previous unsigned parse accepted
   zero, allowing malformed namespace metadata to escape as a valid target ID.
   The hotpath crate build and formatting pass; no database operation was run.
+
+## FOD 3.4.503 — reject zero entity IDs in indexer results
+
+- [x] Use shared positive-ID decoding for PostgreSQL entity IDs exposed in
+  indexer models, snapshot/file catalogues, import-plan rows, duplicate sets,
+  hash grouping and cleanup selections. Keep byte/count/inode/device values
+  on unsigned parsing because zero is meaningful for those fields. Formatting
+  and `cargo check --offline -p fod-rust-indexer` pass. No database operation
+  was run, so malformed live SQL-result behavior still lacks integration
+  coverage against an isolated schema-38 database.

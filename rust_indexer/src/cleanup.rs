@@ -1,6 +1,7 @@
 use crate::db::sql_quote_literal;
 use crate::model::{
-    parse_postgres_bool, require_exact_row_columns, require_single_exact_row, CleanupFailedSummary,
+    parse_positive_u64, parse_postgres_bool, require_exact_row_columns, require_single_exact_row,
+    CleanupFailedSummary,
 };
 use fod_rust_hotpath::pg::{DbRepo, DbRepoTransaction};
 use std::collections::{BTreeMap, BTreeSet};
@@ -90,7 +91,7 @@ fn collect_directory_rows(
         .map(|row| {
             require_exact_row_columns(row, 2, "directory subtree")?;
             Ok((
-                parse_u64(&row[0], "directory id")?,
+                parse_positive_u64(&row[0], "directory ID")?,
                 parse_u64(&row[1], "directory depth")?,
             ))
         })
@@ -123,9 +124,9 @@ fn collect_file_rows(
         .map(|row| {
             require_exact_row_columns(row, 4, "file subtree")?;
             Ok((
-                parse_u64(&row[0], "file id")?,
-                parse_u64(&row[1], "data object id")?,
-                parse_u64(&row[2], "file parent directory id")?,
+                parse_positive_u64(&row[0], "file ID")?,
+                parse_positive_u64(&row[1], "data-object ID")?,
+                parse_positive_u64(&row[2], "file parent directory ID")?,
                 row[3].clone(),
             ))
         })
@@ -224,7 +225,7 @@ fn collect_data_object_file_ids(
     rows.iter()
         .map(|row| {
             require_exact_row_columns(row, 1, "data-object file reference")?;
-            parse_u64(&row[0], "file id")
+            parse_positive_u64(&row[0], "file ID")
         })
         .collect()
 }

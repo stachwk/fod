@@ -1,5 +1,5 @@
 use crate::db::hex_encode;
-use crate::model::{require_exact_row_columns, HashSummary, IndexedFile};
+use crate::model::{parse_positive_u64, require_exact_row_columns, HashSummary, IndexedFile};
 use crate::progress::ThrottledProgress;
 use crate::scan;
 use crate::source;
@@ -266,10 +266,7 @@ pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
     let mut groups: BTreeMap<(String, String, u64), Vec<u64>> = BTreeMap::new();
     for row in rows {
         require_exact_row_columns(&row, 6, "duplicate hash candidate")?;
-        let file_id = row[0]
-            .trim()
-            .parse::<u64>()
-            .map_err(|err| format!("invalid file id in hash rows: {err}"))?;
+        let file_id = parse_positive_u64(&row[0], "file ID in hash rows")?;
         if source::is_ignored_index_path(Path::new(&row[1]), &row[2]) {
             continue;
         }

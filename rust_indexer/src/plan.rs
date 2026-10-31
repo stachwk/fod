@@ -1,8 +1,8 @@
 use crate::db::{ensure_indexer_request_token_schema, sql_quote_literal};
 use crate::hash;
 use crate::model::{
-    parse_postgres_bool, require_exact_row_columns, require_single_exact_row, DuplicateSet,
-    ImportPlanSummary, IndexedFile,
+    parse_positive_u64, parse_postgres_bool, require_exact_row_columns, require_single_exact_row,
+    DuplicateSet, ImportPlanSummary, IndexedFile,
 };
 use crate::output::{
     DuplicateReportSnapshot, DuplicateSetMemberView, DuplicateSetSnapshot, ImportPlanEntryView,
@@ -339,10 +339,7 @@ pub(crate) fn load_duplicate_report_snapshot(
         if file_size == 0 {
             continue;
         }
-        let set_id = row[0]
-            .trim()
-            .parse::<u64>()
-            .map_err(|err| format!("invalid duplicate set id: {err}"))?;
+        let set_id = parse_positive_u64(&row[0], "duplicate-set ID")?;
         let snapshot = match load_duplicate_set_snapshot(repo, set_id) {
             Ok(snapshot) => snapshot,
             Err(err) if err.contains("no visible members") => continue,
@@ -463,45 +460,23 @@ pub(crate) fn load_import_plan_snapshot(
     for row in entry_rows {
         require_exact_row_columns(&row, 15, "import plan entry")?;
         entries.push(ImportPlanEntryView {
-            id_import_plan_entry: row[0]
-                .trim()
-                .parse::<u64>()
-                .map_err(|err| format!("invalid import plan entry id: {err}"))?,
-            id_import_plan: row[1]
-                .trim()
-                .parse::<u64>()
-                .map_err(|err| format!("invalid import plan id: {err}"))?,
-            id_file: row[2]
-                .trim()
-                .parse::<u64>()
-                .map_err(|err| format!("invalid file id: {err}"))?,
-            source_id: row[3]
-                .trim()
-                .parse::<u64>()
-                .map_err(|err| format!("invalid source id: {err}"))?,
+            id_import_plan_entry: parse_positive_u64(&row[0], "import plan entry ID")?,
+            id_import_plan: parse_positive_u64(&row[1], "import plan ID")?,
+            id_file: parse_positive_u64(&row[2], "file ID")?,
+            source_id: parse_positive_u64(&row[3], "source ID")?,
             source_name: row[4].clone(),
             source_kind: row[5].clone(),
             source_root_path: row[6].clone(),
             id_duplicate_set: if row[7].trim().is_empty() {
                 None
             } else {
-                Some(
-                    row[7]
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|err| format!("invalid duplicate set id: {err}"))?,
-                )
+                Some(parse_positive_u64(&row[7], "duplicate-set ID")?)
             },
             action: row[8].clone(),
             canonical_file_id: if row[9].trim().is_empty() {
                 None
             } else {
-                Some(
-                    row[9]
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|err| format!("invalid canonical file id: {err}"))?,
-                )
+                Some(parse_positive_u64(&row[9], "canonical file ID")?)
             },
             logical_path: row[10].clone(),
             source_path: row[11].clone(),

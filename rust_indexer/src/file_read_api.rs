@@ -1,6 +1,9 @@
 use crate::duplicate_set_api;
 use crate::hash;
-use crate::model::{parse_postgres_bool, require_exact_row_columns, require_single_exact_row};
+use crate::model::{
+    parse_optional_positive_u64, parse_positive_u64, parse_postgres_bool,
+    require_exact_row_columns, require_single_exact_row,
+};
 use crate::output::IndexerCapabilitiesOutput;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -494,8 +497,8 @@ fn classify_io_error(action: &str, path: &Path, err: std::io::Error) -> String {
 fn file_read_record_from_row(row: &[String]) -> Result<FileReadRecord, String> {
     require_exact_row_columns(row, 22, "file read metadata")?;
     Ok(FileReadRecord {
-        file_id: parse_u64(&row[0], "file id")?,
-        source_id: parse_u64(&row[1], "source id")?,
+        file_id: parse_positive_u64(&row[0], "file ID")?,
+        source_id: parse_positive_u64(&row[1], "source ID")?,
         source_name: row[2].clone(),
         source_kind: row[3].clone(),
         source_root: PathBuf::from(&row[4]),
@@ -515,7 +518,7 @@ fn file_read_record_from_row(row: &[String]) -> Result<FileReadRecord, String> {
         hash_observed_mtime_ns: parse_optional_i64(&row[18], "hash observed mtime_ns")?,
         hash_observed_inode: parse_optional_u64(&row[19], "hash observed inode")?,
         hash_observed_device: parse_optional_u64(&row[20], "hash observed device")?,
-        scan_run_id: parse_optional_u64(&row[21], "scan run id")?,
+        scan_run_id: parse_optional_positive_u64(&row[21], "scan run ID")?,
     })
 }
 

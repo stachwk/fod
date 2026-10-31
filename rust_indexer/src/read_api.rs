@@ -1,5 +1,8 @@
 use crate::db::sql_quote_literal;
-use crate::model::{parse_postgres_bool, require_exact_row_columns, require_single_exact_row};
+use crate::model::{
+    parse_optional_positive_u64, parse_positive_u64, parse_postgres_bool,
+    require_exact_row_columns, require_single_exact_row,
+};
 use crate::output::{IndexerCapabilitiesOutput, INDEXER_MAX_PAGE_LIMIT};
 use fod_rust_hotpath::pg::DbRepo;
 use serde::Serialize;
@@ -552,8 +555,8 @@ fn file_catalog_item_from_row(row: &[String]) -> Result<FileCatalogItem, String>
     let source_path = Path::new(&source_root).join(&path).display().to_string();
 
     Ok(FileCatalogItem {
-        file_id: parse_u64(&row[0], "file id")?,
-        source_id: parse_u64(&row[1], "source id")?,
+        file_id: parse_positive_u64(&row[0], "file ID")?,
+        source_id: parse_positive_u64(&row[1], "source ID")?,
         source_name: row[2].clone(),
         source_kind: row[3].clone(),
         source_root,
@@ -571,7 +574,7 @@ fn file_catalog_item_from_row(row: &[String]) -> Result<FileCatalogItem, String>
         hash_algorithm: optional_text(&row[13]),
         full_hash_hex: optional_text(&row[14]),
         hash_status: optional_text(&row[15]),
-        scan_run_id: parse_optional_u64(&row[16], "scan run id")?,
+        scan_run_id: parse_optional_positive_u64(&row[16], "scan run ID")?,
         created_at: row[17].clone(),
         updated_at: row[18].clone(),
     })
@@ -599,7 +602,7 @@ fn validate_plan_list_request(
 fn import_plan_list_item_from_row(row: &[String]) -> Result<ImportPlanListItem, String> {
     require_exact_row_columns(row, 7, "import plan list")?;
     Ok(ImportPlanListItem {
-        plan_id: parse_u64(&row[0], "import plan id")?,
+        plan_id: parse_positive_u64(&row[0], "import plan ID")?,
         status: row[1].clone(),
         source_filter: optional_text(&row[2]),
         dry_run: parse_postgres_bool(&row[3], "import plan dry_run")?,

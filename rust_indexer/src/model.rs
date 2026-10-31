@@ -295,6 +295,14 @@ fn parse_u64(value: &str) -> Result<u64, String> {
         .map_err(|err| format!("invalid u64 value `{value}`: {err}"))
 }
 
+pub(crate) fn parse_positive_u64(value: &str, label: &str) -> Result<u64, String> {
+    let parsed = parse_u64(value).map_err(|err| format!("invalid {label}: {err}"))?;
+    if parsed == 0 {
+        return Err(format!("{label} must be positive"));
+    }
+    Ok(parsed)
+}
+
 fn parse_i64(value: &str) -> Result<i64, String> {
     value
         .trim()
@@ -307,6 +315,13 @@ fn parse_optional_u64(value: &str) -> Result<Option<u64>, String> {
         return Ok(None);
     }
     parse_u64(value).map(Some)
+}
+
+pub(crate) fn parse_optional_positive_u64(value: &str, label: &str) -> Result<Option<u64>, String> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_positive_u64(value, label).map(Some)
 }
 
 fn parse_optional_i64(value: &str) -> Result<Option<i64>, String> {
@@ -356,7 +371,7 @@ impl IndexSource {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
         require_exact_row_columns(row, 4, "index source")?;
         Ok(Self {
-            id_source: parse_u64(row_value(row, 0, "index source")?)?,
+            id_source: parse_positive_u64(row_value(row, 0, "index source")?, "index source ID")?,
             name: row_value(row, 1, "index source")?.to_string(),
             kind: row_value(row, 2, "index source")?.to_string(),
             root_path: PathBuf::from(row_value(row, 3, "index source")?),
@@ -368,8 +383,8 @@ impl IndexedFile {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
         require_exact_row_columns(row, 12, "indexed file")?;
         Ok(Self {
-            id_file: parse_u64(row_value(row, 0, "indexed file")?)?,
-            source_id: parse_u64(row_value(row, 1, "indexed file")?)?,
+            id_file: parse_positive_u64(row_value(row, 0, "indexed file")?, "file ID")?,
+            source_id: parse_positive_u64(row_value(row, 1, "indexed file")?, "source ID")?,
             source_name: row_value(row, 2, "indexed file")?.to_string(),
             root_path: PathBuf::from(row_value(row, 3, "indexed file")?),
             path: row_value(row, 4, "indexed file")?.to_string(),
@@ -395,7 +410,7 @@ impl FileHash {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
         require_exact_row_columns(row, 9, "index file hash")?;
         Ok(Self {
-            id_file: parse_u64(row_value(row, 0, "index file hash")?)?,
+            id_file: parse_positive_u64(row_value(row, 0, "index file hash")?, "file ID")?,
             hash_algorithm: row_value(row, 1, "index file hash")?.to_string(),
             partial_hash_hex: {
                 let value = row_value(row, 2, "index file hash")?;
@@ -426,7 +441,10 @@ impl DuplicateSet {
     pub fn from_row(row: &[String]) -> Result<Self, String> {
         require_exact_row_columns(row, 6, "duplicate set")?;
         Ok(Self {
-            id_duplicate_set: parse_u64(row_value(row, 0, "duplicate set")?)?,
+            id_duplicate_set: parse_positive_u64(
+                row_value(row, 0, "duplicate set")?,
+                "duplicate-set ID",
+            )?,
             hash_algorithm: row_value(row, 1, "duplicate set")?.to_string(),
             full_hash_hex: row_value(row, 2, "duplicate set")?.to_string(),
             file_size: parse_u64(row_value(row, 3, "duplicate set")?)?,

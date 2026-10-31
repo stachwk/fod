@@ -1034,3 +1034,7 @@ the transaction instead of being interpreted as “no hardlink” or “no open
 lease”.
 FOD 3.4.502 applies the positive-ID decoder when resolving the backing symlink
 from a symlink-hardlink entry; a corrupt zero target ID now fails the lookup.
+FOD 3.4.503 applies a shared positive-ID decoder to persisted entity IDs across
+indexer source/file/hash/duplicate-set models, file and snapshot catalogues,
+import-plan views, hash grouping and cleanup selections. Nullable scan-run and
+snapshot maximum-file IDs remain nullable, but zero is rejected when present.
