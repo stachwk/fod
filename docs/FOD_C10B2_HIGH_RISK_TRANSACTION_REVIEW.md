@@ -303,6 +303,23 @@ atomowo zmienić token/status w PostgreSQL; stare tokeny mają być odrzucane.
 Odzyskiwanie wymaga regresji wielotransakcyjnej obejmującej wygasły plan,
 wznowienie starego właściciela i równoległe przejęcie przez cleanup.
 
+Źródłowa mapa mutacji do objęcia tokenem:
+
+| Etap | Wywołania w `materialize.rs` | Granica, która musi sprawdzić fencing token |
+| --- | --- | --- |
+| Utworzenie planu i właściciela | `plan::insert_import_plan()` | Utworzenie planu `materialize_running` i pierwszego tokenu właściciela w jednej transakcji |
+| Katalog importu i podkatalogi | `ensure_root_directory()`, `ensure_directory_chain()` → `DbRepo::create_directory()` | Transakcja tworząca każdy katalog |
+| Plik kanoniczny i referencje | `materialize_canonical_file()`, `materialize_reference_file()` → `DbRepo::create_file()` | Transakcja tworząca każdy wpis pliku |
+| Zapis payloadu kanonicznego | `persist_file_blocks_from_path()` | Każda transakcja zapisująca bloki/rozmiar; wcześniejszy check nie wystarczy dla wieloczęściowego zapisu |
+| Adopcja payloadu dla duplikatu | `adopt_source_data_object()` | Transakcja zmieniająca referencję pliku i liczniki obiektu |
+| Zapis podsumowania planu | `upsert_index_import_plan_entries_staged()` | Transakcja stagingu musi sprawdzić właściciela, a nie tylko istniejący `plan_id` |
+| Zakończenie i obsługa błędu | `plan::update_import_plan()` oraz `cleanup_failed_materialization()` | Zmiana statusu/cleanup muszą warunkować się tym samym tokenem; stary proces nie może oznaczyć przejętego planu jako failed/completed |
+
+Lista wynika z bieżącego kodu. Każdy `DbRepo` może pobierać kolejne połączenie
+z puli, dlatego token trzeba przekazać do granicy SQL transakcji każdej mutacji;
+lokalny wrapper w `materialize_source()` albo heartbeat właściciela sam w sobie
+nie obejmie powyższych commitów.
+
 ### TX-03D — wyścig licznika współdzielonego obiektu (poprawka, test otwarty)
 
 Analiza kodu 2026-10-31 wykazała, że cleanup wylicza listę plików spoza
