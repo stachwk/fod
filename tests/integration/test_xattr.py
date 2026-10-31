@@ -454,6 +454,25 @@ def main() -> None:
             dir_path.mkdir()
             file_path.write_bytes(b"payload\n")
 
+            # PostgreSQL text cannot preserve invalid UTF-8. FOD must reject
+            # such xattr names instead of aliasing the valid replacement-char
+            # name through a lossy conversion.
+            valid_non_ascii_name = b"user.fod.\xef\xbf\xbd"
+            invalid_utf8_name = b"user.fod.\xff"
+            os.setxattr(file_path, valid_non_ascii_name, b"valid-name-value")
+            for operation in (
+                lambda: _REAL_SETXATTR(file_path, invalid_utf8_name, b"bad-value"),
+                lambda: _REAL_GETXATTR(file_path, invalid_utf8_name),
+                lambda: _REAL_REMOVEXATTR(file_path, invalid_utf8_name),
+            ):
+                try:
+                    operation()
+                except OSError as exc:
+                    assert exc.errno == errno.EILSEQ, exc
+                else:
+                    raise AssertionError("invalid UTF-8 xattr name unexpectedly succeeded")
+            assert _REAL_GETXATTR(file_path, valid_non_ascii_name) == b"valid-name-value"
+
             os.setxattr(file_path, "user.comment", user_value)
             assert os.getxattr(file_path, "user.comment") == user_value
             assert "user.comment" in os.listxattr(file_path)

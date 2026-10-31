@@ -90,9 +90,6 @@ samego numeru protokołu.
 
 ## Otwarte prace w warstwie FUSE
 
-- dodać montowaną regresję `EILSEQ` dla nie-UTF-8 celu `symlink()` i nazw
-  xattr; PostgreSQL `text` nie przechowuje takich bajtów, a callbacki muszą
-  odrzucać je bez aliasowania poprawnych nazw;
 - dodać test błędów `fsync`, gdy będzie dostępny wąski mechanizm wstrzykiwania
   błędów PostgreSQL w teście montowanym;
 - zmierzyć retencję cache inode/ścieżek i rozważyć `forget`/`batch_forget` po
@@ -121,6 +118,9 @@ userspace może odpowiedzieć `EINTR` na pierwotne żądanie po `FUSE_INTERRUPT`
 ([opis zachowania](https://github.com/torvalds/linux/blob/v6.17/Documentation/filesystems/fuse/fuse.rst)).
 Test jednostkowy preflight sprawdza granicę wersji 6.17.0 oraz odrzucenie
 starszego/nieparsowalnego jądra i libfuse poniżej 3.0.0.
+Montowane regresje `test-symlink.sh` i `test_xattr.py` sprawdzają także, że
+niepoprawny UTF-8 w celu symlinka i nazwie xattr kończy się `EILSEQ` bez
+aliasowania poprawnego wejścia z U+FFFD.
 
 Nie ma obecnie udokumentowanej macierzy end-to-end dla minimalnych wersji
 Linux/libfuse ani wielu dystrybucji. Sprawdzony 2026-10-31 host działa na

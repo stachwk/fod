@@ -74,6 +74,33 @@ else:
     raise AssertionError("readlink on a regular file unexpectedly succeeded")
 PY
 
+python3 - "${link_path}" <<'PY'
+import errno
+import os
+import sys
+
+existing_link = os.fsencode(sys.argv[1])
+parent = os.path.dirname(existing_link)
+valid_target = parent + b"/target-\xef\xbf\xbd"
+invalid_target = b"target-\xff"
+invalid_link = existing_link + b"-invalid-target"
+
+with open(valid_target, "wb") as target_file:
+    target_file.write(b"replacement-character target")
+
+try:
+    os.symlink(invalid_target, invalid_link)
+except OSError as exc:
+    assert exc.errno == errno.EILSEQ, exc
+else:
+    raise AssertionError("symlink with invalid UTF-8 target unexpectedly succeeded")
+
+assert not os.path.lexists(invalid_link)
+assert os.path.exists(valid_target)
+with open(valid_target, "rb") as target_file:
+    assert target_file.read() == b"replacement-character target"
+PY
+
 mv "${link_path}" "${link_renamed}"
 [[ -L "${link_renamed}" ]]
 fod_assert_eq "$(readlink "${link_renamed}")" "${payload}" "renamed symlink target mismatch"

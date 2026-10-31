@@ -14,17 +14,16 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **Sprawdź brak aliasowania nie-UTF-8 w celach symlinków i nazwach xattr.**
-  PostgreSQL `text` nie zachowuje dowolnych bajtów wejścia. Komponenty ścieżek
-  odrzucają niepoprawny UTF-8 jako `EILSEQ`, ale `symlink()` i callbacki xattr
-  wcześniej konwertowały takie bajty przez `to_string_lossy()`, co mogło
-  wskazać inną nazwę. Callbacki zwracają teraz `EILSEQ` zamiast tworzyć/odczytać
-  alias. Dodać montowaną regresję: przygotować poprawną nazwę z U+FFFD, wysłać
-  odpowiadające jej niepoprawne bajty w `symlink()` oraz `getxattr()`/
-  `setxattr()`/`removexattr()`, sprawdzić `EILSEQ` i niezmieniony poprawny
-  obiekt/atrybut. Linuxowe nazwy i cele ścieżek mogą zawierać nie-UTF-8; do
-  pełnej obsługi potrzebna byłaby reprezentacja bajtowa w schemacie, poza tym
-  zakresem poprawienia aliasowania.
+- [x] **Nie-UTF-8 w celu symlinka i nazwie xattr nie może aliasować U+FFFD.**
+  PostgreSQL `text` nie zachowuje dowolnych bajtów wejścia. Montowane regresje
+  sprawdzają, że `symlink()` z celem `target-\xff` oraz
+  `getxattr()`/`setxattr()`/`removexattr()` z nazwą `user.fod.\xff` zwracają
+  dokładnie `EILSEQ`, nie tworzą linku i nie zmieniają poprawnych obiektów o
+  nazwach zawierających U+FFFD. Testy `make test-symlink test-xattr` przeszły
+  2026-10-31 na Linux 6.17/libfuse3 3.17.4 i izolowanej bazie PostgreSQL 16.15;
+  bazę testową usunięto po przebiegu. To zamyka regresję aliasowania, nie
+  zapewnia pełnej obsługi dowolnych bajtów ścieżek; do tego potrzebna byłaby
+  reprezentacja bajtowa w schemacie.
 
 - [ ] **Dodaj regresję dla nie-UTF-8 ścieżki pliku konfiguracyjnego.**
   `expand_user()` rozwija teraz prefiks `~/` operując na komponentach `Path`,
