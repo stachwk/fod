@@ -223,9 +223,11 @@ pub fn create_catalog_snapshot(
     let request_token = new_snapshot_request_token();
     let request_token_literal = sql_quote_literal(&request_token);
     if let Some(source_name) = source.as_deref() {
+        let source_literal = sql_quote_literal(source_name);
         let rows = repo.query_rows_text(&format!(
-            "SELECT 1 FROM index_sources WHERE name = {} LIMIT 1",
-            sql_quote_literal(source_name)
+            "SELECT 1 FROM index_sources \
+             WHERE md5(name) = md5({source_literal}) \
+               AND name COLLATE \"C\" = {source_literal} COLLATE \"C\" LIMIT 1"
         ))?;
         if rows.is_empty() {
             return Err(format!(
@@ -236,7 +238,12 @@ pub fn create_catalog_snapshot(
 
     let source_condition = source
         .as_deref()
-        .map(|value| format!("WHERE s.name = {}", sql_quote_literal(value)))
+        .map(|value| {
+            let literal = sql_quote_literal(value);
+            format!(
+                "WHERE md5(s.name) = md5({literal}) AND s.name COLLATE \"C\" = {literal} COLLATE \"C\""
+            )
+        })
         .unwrap_or_default();
     let source_literal = source
         .as_deref()
@@ -867,7 +874,10 @@ fn snapshot_filter_conditions(filters: &crate::read_api::FileCatalogFilters) -> 
         ));
     }
     if let Some(source) = filters.source.as_deref() {
-        conditions.push(format!("f.source_name = {}", sql_quote_literal(source)));
+        let literal = sql_quote_literal(source);
+        conditions.push(format!(
+            "md5(f.source_name) = md5({literal}) AND f.source_name COLLATE \"C\" = {literal} COLLATE \"C\""
+        ));
     }
     if let Some(extension) = filters.extension.as_deref() {
         conditions.push(format!(

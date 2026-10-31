@@ -292,7 +292,12 @@ pub fn load_indexed_files(
     source_name: Option<&str>,
 ) -> Result<Vec<IndexedFile>, String> {
     let filter = source_name
-        .map(|name| format!("WHERE s.name = {}", sql_quote_literal(name)))
+        .map(|name| {
+            let literal = sql_quote_literal(name);
+            format!(
+                "WHERE md5(s.name) = md5({literal}) AND s.name COLLATE \"C\" = {literal} COLLATE \"C\""
+            )
+        })
         .unwrap_or_default();
     let sql = format!(
         "

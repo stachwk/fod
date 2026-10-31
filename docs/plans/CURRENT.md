@@ -74,3 +74,10 @@ audit; this closes one stale-read path, not the entire authority audit.
 Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.
+
+Schema 35 replaces unbounded indexer text B-tree keys with digest candidate
+indexes, full-value comparisons and PostgreSQL advisory serialization. The
+long-path integration regression passed with a 3000-byte source name and
+3041-byte path, including scan and snapshot readback; the schema-upgrade test
+also passed. See [`SQL_SCHEMA_LIMIT_AUDIT.md`](../SQL_SCHEMA_LIMIT_AUDIT.md) and
+[`TODO.md`](../../TODO.md) for the implementation and evidence.

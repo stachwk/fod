@@ -434,7 +434,10 @@ fn file_filter_conditions(filters: &FileCatalogFilters) -> Vec<String> {
         ));
     }
     if let Some(source) = filters.source.as_deref() {
-        conditions.push(format!("s.name = {}", sql_quote_literal(source)));
+        let literal = sql_quote_literal(source);
+        conditions.push(format!(
+            "md5(s.name) = md5({literal}) AND s.name COLLATE \"C\" = {literal} COLLATE \"C\""
+        ));
     }
     if let Some(extension) = filters.extension.as_deref() {
         conditions.push(format!(

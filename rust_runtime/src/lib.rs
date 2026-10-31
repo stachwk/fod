@@ -38,7 +38,7 @@ pub const FOD_VERSION_LABEL: &str = env!("FOD_VERSION_LABEL");
 pub const FOD_VERSION: &str = env!("FOD_VERSION");
 // Keep this aligned with rust_mkfs::SCHEMA_VERSION: clients reject older
 // replicas until physical WAL replay exposes the schema they require.
-pub const FOD_REQUIRED_SCHEMA_VERSION: u32 = 34;
+pub const FOD_REQUIRED_SCHEMA_VERSION: u32 = 35;
 
 pub fn compare_fod_client_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, String> {
     fn parse(value: &str) -> Result<(u64, u64, u64), String> {

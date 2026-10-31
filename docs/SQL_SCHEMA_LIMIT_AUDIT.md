@@ -80,6 +80,14 @@ B-tree do około jednej trzeciej strony, po ewentualnej kompresji TOAST:
 Przy typowej stronie 8 KiB może więc wystąpić rozbieżność między poprawną
 ścieżką plikową a dopuszczalnym rozmiarem wpisu indeksu. FOD nie wymaga
 konkretnego `BLCKSZ`, a serwer referencyjny projektu używa 32 KiB, więc ryzyko
-zależy od konfiguracji serwera i kompresowalności ścieżki. Reprodukcja runtime
-pozostaje do wykonania; pełna diagnoza i bezpieczny kierunek naprawy są w
-[`TODO.md`](../TODO.md).
+zależy od konfiguracji serwera i kompresowalności ścieżki. Migracja 0035
+zastępuje pełne klucze tekstowe indeksami kandydatów opartymi o `md5()`; kod
+transakcyjny nadal porównuje pełną nazwę/ścieżkę bajtowo i serializuje
+konkurencyjne zapisy blokadami advisory w PostgreSQL, więc skrót nie jest
+tożsamością ani jedynym warunkiem unikalności. Indeks ścieżek snapshotów,
+którego nie używały zapytania filtrujące substring i stronicowane po ID,
+usunięto; indeks źródła snapshotu również nie przechowuje już pełnego tekstu.
+Test migracji upgrade oraz regresja indeksatora przechodzą. Regresja zapisuje
+źródło 3000-bajtowe, skanuje ścieżkę 3041-bajtową, tworzy snapshot i odczytuje
+pełną ścieżkę; działa na osobnej, tymczasowej bazie i nie wymaga montowania
+FUSE. Szczegóły implementacji i wyniki weryfikacji są w [`TODO.md`](../TODO.md).

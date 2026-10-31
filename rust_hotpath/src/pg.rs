@@ -3103,10 +3103,12 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
             && sql.contains(
                 "ON CONFLICT (request_token) DO UPDATE SET reserved_bytes = EXCLUDED.reserved_bytes, expires_at = EXCLUDED.expires_at",
             )
-        || sql.starts_with("INSERT INTO index_sources ")
-            && sql.contains("ON CONFLICT (name) DO UPDATE SET kind = EXCLUDED.kind, root_path = EXCLUDED.root_path, updated_at = NOW()")
-        || sql.starts_with("INSERT INTO index_files ")
-            && sql.contains("ON CONFLICT (id_index_source, path) DO UPDATE SET id_scan_run = EXCLUDED.id_scan_run, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, inode = EXCLUDED.inode, device = EXCLUDED.device, file_kind = EXCLUDED.file_kind, scan_status = EXCLUDED.scan_status, source_changed = EXCLUDED.source_changed, updated_at = NOW()")
+        || sql.starts_with("UPDATE index_sources AS target SET kind = staged.kind")
+            && sql.contains("INSERT INTO index_sources (")
+            && sql.contains("md5(target.name) = md5(staged.name)")
+        || sql.starts_with("UPDATE index_files AS target SET id_scan_run = staged.id_scan_run")
+            && sql.contains("INSERT INTO index_files (")
+            && sql.contains("md5(target.path) = md5(staged.path)")
         || sql.starts_with("INSERT INTO index_scan_runs ")
             && sql.contains("ON CONFLICT (request_token) DO UPDATE SET id_index_source = EXCLUDED.id_index_source, status = EXCLUDED.status, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_file_hashes ")
@@ -15129,6 +15131,14 @@ mod tests {
             "INSERT INTO payload_capacity_reservations (request_token, reserved_bytes, created_at, expires_at) VALUES ($1, $2, NOW(), NOW() + INTERVAL '1 hour') ON CONFLICT (request_token) DO UPDATE SET reserved_bytes = EXCLUDED.reserved_bytes, expires_at = EXCLUDED.expires_at",
         )
         .unwrap();
+        let source_name_digest_merge_sql = std::ffi::CString::new(
+            "UPDATE index_sources AS target SET kind = staged.kind FROM index_sources_stage AS staged WHERE md5(target.name) = md5(staged.name); INSERT INTO index_sources (name, kind) SELECT name, kind FROM index_sources_stage",
+        )
+        .unwrap();
+        let index_file_path_digest_merge_sql = std::ffi::CString::new(
+            "UPDATE index_files AS target SET id_scan_run = staged.id_scan_run FROM index_files_stage AS staged WHERE md5(target.path) = md5(staged.path); INSERT INTO index_files (id_index_source, path) SELECT id_index_source, path FROM index_files_stage",
+        )
+        .unwrap();
         let data_blocks_copy_sql = std::ffi::CString::new(
             "INSERT INTO data_blocks (data_object_id, _order, data) SELECT $2, _order, data FROM data_blocks WHERE data_object_id = $1",
         )
@@ -15169,6 +15179,8 @@ mod tests {
         assert!(sql_is_replayable_command(&scan_run_insert_sql));
         assert!(sql_is_replayable_command(&import_plan_insert_sql));
         assert!(sql_is_replayable_command(&capacity_reservation_insert_sql));
+        assert!(sql_is_replayable_command(&source_name_digest_merge_sql));
+        assert!(sql_is_replayable_command(&index_file_path_digest_merge_sql));
         assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
         assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));
         assert!(!sql_is_replayable_command(&copy_block_crc_copy_sql));

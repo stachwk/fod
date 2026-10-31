@@ -40,14 +40,15 @@ pub fn register_source(
 }
 
 pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
+    let name_literal = sql_quote_literal(name);
     let sql = format!(
         "
         SELECT id_index_source, name, kind, root_path
         FROM index_sources
-        WHERE name = {}
+        WHERE md5(name) = md5({name_literal})
+          AND name COLLATE \"C\" = {name_literal} COLLATE \"C\"
         LIMIT 1
-        ",
-        sql_quote_literal(name)
+        "
     );
     let rows = repo.query_rows_text(&sql)?;
     let row = rows
@@ -73,15 +74,19 @@ pub fn list_sources(repo: &DbRepo, kind_filter: Option<&str>) -> Result<Vec<Inde
 }
 
 pub fn remove_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
-    let sql = format!(
-        "
-        DELETE FROM index_sources
-        WHERE name = {}
-        RETURNING id_index_source, name, kind, root_path
-        ",
-        sql_quote_literal(name)
-    );
-    let rows = repo.query_rows_text(&sql)?;
+    let name_literal = sql_quote_literal(name);
+    let rows = repo.with_transaction(|tx| {
+        tx.query_rows_text(&format!(
+            "SELECT pg_advisory_xact_lock(hashtextextended( \
+                 'fod:index-source:' || md5({name_literal}), 0))"
+        ))?;
+        tx.query_rows_text(&format!(
+            "DELETE FROM index_sources \
+             WHERE md5(name) = md5({name_literal}) \
+               AND name COLLATE \"C\" = {name_literal} COLLATE \"C\" \
+             RETURNING id_index_source, name, kind, root_path"
+        ))
+    })?;
     let row = rows
         .first()
         .ok_or_else(|| format!("unknown source: {name}"))?;

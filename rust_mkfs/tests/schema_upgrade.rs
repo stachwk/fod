@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 34;
+const SCHEMA_VERSION: u64 = 35;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -1048,6 +1048,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0032: 0032_schema_upgrade_state.sql",
         "0033: 0033_byte_length_name_limits.sql",
         "0034: 0034_align_numeric_column_ranges.sql",
+        "0035: 0035_hash_long_indexer_paths.sql",
     ] {
         assert!(
             status_after_init.contains(needle),

@@ -69,7 +69,12 @@ pub(crate) fn load_plannable_files(
     source_filter: Option<&str>,
 ) -> Result<Vec<PlannableFile>, String> {
     let source_clause = source_filter
-        .map(|source| format!(" AND s.name = {}", sql_quote_literal(source)))
+        .map(|source| {
+            let literal = sql_quote_literal(source);
+            format!(
+                " AND md5(s.name) = md5({literal}) AND s.name COLLATE \"C\" = {literal} COLLATE \"C\""
+            )
+        })
         .unwrap_or_default();
     let rows = repo.query_rows_text(&format!(
         "

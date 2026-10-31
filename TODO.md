@@ -14,22 +14,22 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **Obsłużyć długie ścieżki w indeksach indeksatora bez utraty unikalności.**
-  Źródło jest potwierdzone w kodzie: `rust_indexer/src/scan.rs` zapisuje
-  ścieżkę względną z `WalkDir` bez limitu aplikacyjnego; `migrations/base_schema.sql`
-  tworzy unikalny B-tree na `(id_index_source, path)`, a dla snapshotów B-tree
-  na `(id_catalog_snapshot, path)`. PostgreSQL ogranicza wpis B-tree do około
-  jednej trzeciej strony (po ewentualnej kompresji TOAST), więc długi,
-  słabo kompresowalny path może nie przejść skanu albo tworzenia snapshotu na
-  serwerze z typową stroną 8 KiB. Nie wykonano jeszcze reprodukcji runtime;
-  pewność mechanizmu wynika z limitu PostgreSQL i obecnych definicji/ścieżek
-  zapisu. Zmiana `TEXT` na `VARCHAR(n)` nie rozwiązuje problemu. Następny krok:
-  wprowadzić indeks kandydujący o stałym rozmiarze i serializację konfliktów
-  przez PostgreSQL advisory lock, po czym zawsze porównywać pełną ścieżkę;
-  skrót nie może być samodzielnym kluczem unikalności, bo kolizja nie może
-  scalać różnych plików. Sprawdzić również, czy indeks ścieżki w snapshotach
-  jest potrzebny zapytaniom. Nie skracać ścieżek i nie dodawać arbitralnego
-  limitu bez sprawdzenia kontraktu oraz istniejących danych.
+- [x] **Obsłużyć i zweryfikować długie ścieżki w indeksach indeksatora.**
+  Źródło problemu było potwierdzone w kodzie: `WalkDir` zapisuje ścieżkę
+  względną bez limitu aplikacyjnego, podczas gdy B-tree pełnego tekstu może
+  odrzucić wpis większy niż około 1/3 strony. Implementacja w migracji 0035
+  zastępuje takie klucze indeksami MD5 zawężającymi kandydatów; transakcyjny
+  kod porównuje pełne wartości z `COLLATE "C"` i serializuje zapisy blokadami
+  advisory w PostgreSQL. Dodano regresję `tests/integration/test_fod_indexer_long_paths.py`
+  dla 3000-bajtowej nazwy źródła oraz ścieżki przekraczającej limit wpisu
+  typowej strony 8 KiB. `make test-fod-indexer-long-paths` zakończył się
+  sukcesem: `source_name_bytes=3000 path_bytes=3041`, a test utworzył snapshot
+  i odczytał pełną ścieżkę. Test działa na dedykowanej tymczasowej bazie,
+  sprzątanej po uruchomieniu, i nie buduje ani nie montuje frontendu FUSE.
+  `make test-schema-upgrade` również przeszedł na izolowanej bazie, potwierdzając
+  upgrade do schema 35. Początkowe próby na głównej bazie nie mogły wykonać
+  upgrade, bo były w niej aktywne sesje FOD; nie zmieniano tej bazy. Zmiana
+  `TEXT` na `VARCHAR(n)` nie rozwiązuje problemu.
 
 - [ ] **Dokończyć audyt rozmiarów identyfikatorów i reprezentacji `mode` w SQL.**
   `docs/SQL_SCHEMA_LIMIT_AUDIT.md` dokumentuje, że klucze `SERIAL` i wiele

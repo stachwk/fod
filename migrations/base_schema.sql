@@ -275,7 +275,7 @@ CREATE INDEX IF NOT EXISTS idx_files_data_object_id ON files (data_object_id);
 
 CREATE TABLE IF NOT EXISTS index_sources (
     id_index_source SERIAL PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
     kind TEXT NOT NULL,
     root_path TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -306,9 +306,13 @@ CREATE TABLE IF NOT EXISTS index_files (
     scan_status TEXT NOT NULL,
     source_changed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE(id_index_source, path)
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_index_sources_name_md5
+    ON index_sources (md5(name));
+CREATE INDEX IF NOT EXISTS idx_index_files_source_path_md5
+    ON index_files (id_index_source, md5(path));
 
 CREATE TABLE IF NOT EXISTS index_file_hashes (
     id_file INTEGER PRIMARY KEY REFERENCES index_files(id_file) ON DELETE CASCADE,
@@ -656,9 +660,7 @@ CREATE TABLE IF NOT EXISTS index_catalog_snapshot_files (
 CREATE INDEX IF NOT EXISTS idx_index_catalog_snapshots_created
     ON index_catalog_snapshots (id_catalog_snapshot DESC);
 CREATE INDEX IF NOT EXISTS idx_index_catalog_snapshot_files_source
-    ON index_catalog_snapshot_files (id_catalog_snapshot, source_name, id_file);
-CREATE INDEX IF NOT EXISTS idx_index_catalog_snapshot_files_path
-    ON index_catalog_snapshot_files (id_catalog_snapshot, path);
+    ON index_catalog_snapshot_files (id_catalog_snapshot, md5(source_name), id_file);
 CREATE INDEX IF NOT EXISTS idx_index_catalog_snapshot_files_hash_status
     ON index_catalog_snapshot_files (id_catalog_snapshot, hash_status, id_file);
 -- Copyright (c) 2026 Wojciech Stach

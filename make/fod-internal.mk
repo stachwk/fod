@@ -1332,6 +1332,26 @@ test-fod-indexer-json-output: venv init
 
 .PHONY: test-fod-indexer-json-output
 
+test-fod-indexer-long-paths: venv up test-db-destructive-guard
+	$(CARGO_BUILD_MKFS) $(FOD_RUNTIME_FLAG) --bin fod-rust-mkfs
+	$(CARGO_BUILD_INDEXER) $(FOD_RUNTIME_FLAG) --bin fod-indexer
+	@set -u; \
+		db="$(POSTGRES_DB)_indexer_test"; \
+		case "$$db" in ""|*[!A-Za-z0-9_]*) echo "Refusing indexer test database name: $$db" >&2; exit 2 ;; esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test indexer database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres -c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres -c "CREATE DATABASE \"$$db\";" >/dev/null; \
+		test_status=0; cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" FOD_PG_USER="$(FOD_PG_USER)" POSTGRES_USER="$(FOD_PG_USER)" FOD_PG_PASSWORD="$(FOD_PG_PASSWORD)" POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" FOD_PG_HOST="$(FOD_PG_HOST)" FOD_PG_PORT="$(FOD_PG_PORT)" FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" FOD_CONFIG="$(abspath $(FOD_CONFIG_SOURCE))" $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)" || test_status=$$?; \
+		if [ "$$test_status" -eq 0 ]; then FOD_MKFS_BIN="$(abspath $(FOD_MKFS_RUNTIME_BIN))" FOD_INDEXER_BIN="$(abspath $(FOD_INDEXER_RUNTIME_BIN))" FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" FOD_PG_USER="$(FOD_PG_USER)" POSTGRES_USER="$(FOD_PG_USER)" FOD_PG_PASSWORD="$(FOD_PG_PASSWORD)" POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" FOD_PG_HOST="$(FOD_PG_HOST)" FOD_PG_PORT="$(FOD_PG_PORT)" FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" POSTGRES_PORT="$(FOD_PG_PORT)" $(VENV_PYTHON) tests/integration/test_fod_indexer_long_paths.py || test_status=$$?; fi; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres -c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; fi; \
+		if [ "$$test_status" -ne 0 ]; then exit "$$test_status"; fi; \
+		exit "$$cleanup_status"
+
+.PHONY: test-fod-indexer-long-paths
+
 test-fod-indexer-plan-import-scope: venv init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_plan_import_scope.py
 
@@ -2069,7 +2089,7 @@ test-mount-suite: venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
 
 test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
-test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke test-forget-open-unlink-full
+test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-long-paths test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke test-forget-open-unlink-full
 test-integration: test-runtime-profile test-dual-host-same-file-cp-race test-create-write-ownership test-copy-file-range-source-fencing test-rename-write-ownership test-rename-symlink-transactional test-rename-directory-transactional test-stale-writer-fencing
 
 benchmark: benchmarks

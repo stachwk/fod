@@ -204,32 +204,49 @@ impl DbRepo {
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
 
+                let lock_sql = CString::new(format!(
+                    "DO $fod$ DECLARE lock_key BIGINT; BEGIN \
+                     FOR lock_key IN SELECT DISTINCT hashtextextended('fod:index-source:' || md5(name), 0) \
+                     FROM {stage} ORDER BY 1 LOOP \
+                     PERFORM pg_advisory_xact_lock(lock_key); END LOOP; END $fod$",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &lock_sql)?;
+
                 let merge_sql = CString::new(format!(
                     "
-                    INSERT INTO index_sources (
-                        name,
-                        kind,
-                        root_path,
-                        created_at,
-                        updated_at
-                    )
-                    SELECT
-                        name,
-                        kind,
-                        root_path,
-                        NOW(),
-                        NOW()
-                    FROM {stage}
-                    ON CONFLICT (name) DO UPDATE SET
-                        kind = EXCLUDED.kind,
-                        root_path = EXCLUDED.root_path,
+                    UPDATE index_sources AS target
+                    SET kind = staged.kind,
+                        root_path = staged.root_path,
                         updated_at = NOW()
-                    RETURNING id_index_source
+                    FROM {stage} AS staged
+                    WHERE md5(target.name) = md5(staged.name)
+                      AND target.name COLLATE \"C\" = staged.name COLLATE \"C\";
+
+                    INSERT INTO index_sources (
+                        name, kind, root_path, created_at, updated_at
+                    )
+                    SELECT staged.name, staged.kind, staged.root_path, NOW(), NOW()
+                    FROM {stage} AS staged
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM index_sources AS target
+                        WHERE md5(target.name) = md5(staged.name)
+                          AND target.name COLLATE \"C\" = staged.name COLLATE \"C\"
+                    )
                     ",
                     stage = INDEX_SOURCES_STAGE_TABLE
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                exec_command(conn, &merge_sql)?;
+                let lookup_sql = CString::new(format!(
+                    "SELECT target.id_index_source::text FROM index_sources AS target \
+                     JOIN {stage} AS staged ON md5(target.name) = md5(staged.name) \
+                     AND target.name COLLATE \"C\" = staged.name COLLATE \"C\" LIMIT 1",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &lookup_sql)?;
                 let row = rows
                     .first()
                     .ok_or_else(|| "source registration did not return a row".to_string())?;
@@ -448,46 +465,60 @@ impl DbRepo {
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
 
+                let duplicate_sql = CString::new(format!(
+                    "SELECT 1 FROM {stage} GROUP BY id_index_source, path COLLATE \"C\" \
+                     HAVING COUNT(*) > 1 LIMIT 1",
+                    stage = INDEX_FILES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                if !query_rows_text_on_conn(conn, &duplicate_sql)?.is_empty() {
+                    return Err("index scan produced duplicate normalized source paths".to_string());
+                }
+
+                let lock_sql = CString::new(format!(
+                    "DO $fod$ DECLARE lock_key BIGINT; BEGIN \
+                     FOR lock_key IN SELECT DISTINCT hashtextextended( \
+                         'fod:index-file:' || id_index_source::text || ':' || md5(path), 0) \
+                     FROM {stage} ORDER BY 1 LOOP \
+                     PERFORM pg_advisory_xact_lock(lock_key); END LOOP; END $fod$",
+                    stage = INDEX_FILES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &lock_sql)?;
+
                 let merge_sql = CString::new(format!(
                     "
-                    INSERT INTO index_files (
-                        id_index_source,
-                        id_scan_run,
-                        path,
-                        size,
-                        mtime_ns,
-                        inode,
-                        device,
-                        file_kind,
-                        scan_status,
-                        source_changed,
-                        created_at,
-                        updated_at
-                    )
-                    SELECT
-                        id_index_source,
-                        id_scan_run,
-                        path,
-                        size,
-                        mtime_ns,
-                        inode,
-                        device,
-                        file_kind,
-                        scan_status,
-                        source_changed,
-                        NOW(),
-                        NOW()
-                    FROM {stage}
-                    ON CONFLICT (id_index_source, path) DO UPDATE SET
-                        id_scan_run = EXCLUDED.id_scan_run,
-                        size = EXCLUDED.size,
-                        mtime_ns = EXCLUDED.mtime_ns,
-                        inode = EXCLUDED.inode,
-                        device = EXCLUDED.device,
-                        file_kind = EXCLUDED.file_kind,
-                        scan_status = EXCLUDED.scan_status,
-                        source_changed = EXCLUDED.source_changed,
+                    UPDATE index_files AS target
+                    SET id_scan_run = staged.id_scan_run,
+                        size = staged.size,
+                        mtime_ns = staged.mtime_ns,
+                        inode = staged.inode,
+                        device = staged.device,
+                        file_kind = staged.file_kind,
+                        scan_status = staged.scan_status,
+                        source_changed = staged.source_changed,
                         updated_at = NOW()
+                    FROM {stage} AS staged
+                    WHERE target.id_index_source = staged.id_index_source
+                      AND md5(target.path) = md5(staged.path)
+                      AND target.path COLLATE \"C\" = staged.path COLLATE \"C\";
+
+                    INSERT INTO index_files (
+                        id_index_source, id_scan_run, path, size, mtime_ns,
+                        inode, device, file_kind, scan_status, source_changed,
+                        created_at, updated_at
+                    )
+                    SELECT staged.id_index_source, staged.id_scan_run, staged.path,
+                           staged.size, staged.mtime_ns, staged.inode, staged.device,
+                           staged.file_kind, staged.scan_status, staged.source_changed,
+                           NOW(), NOW()
+                    FROM {stage} AS staged
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM index_files AS target
+                        WHERE target.id_index_source = staged.id_index_source
+                          AND md5(target.path) = md5(staged.path)
+                          AND target.path COLLATE \"C\" = staged.path COLLATE \"C\"
+                    )
                     ",
                     stage = INDEX_FILES_STAGE_TABLE
                 ))
