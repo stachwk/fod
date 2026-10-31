@@ -62,7 +62,11 @@ wersję kernela, wynegocjowaną wersję, dostępne, żądane, włączone i niedo
 capability.
 
 FOD prosi m.in. o `POSIX_LOCKS`, `FLOCK_LOCKS`, `ATOMIC_O_TRUNC`,
-`HANDLE_KILLPRIV_V2` i `SETXATTR_EXT`. Zapisujący mount wymaga wynegocjowanych
+`HANDLE_KILLPRIV_V2` i `SETXATTR_EXT`. Mount z ACL dodatkowo wymaga
+`POSIX_ACL` i `DONT_MASK`: Linux stosuje umask do trybu tworzonego obiektu,
+chyba że userspace jawnie wynegocjuje `FUSE_DONT_MASK`. FOD stosuje wtedy
+umask w transakcji tworzenia, po sprawdzeniu domyślnego ACL rodzica. Zapisujący
+mount wymaga wynegocjowanych
 `ATOMIC_O_TRUNC`, `HANDLE_KILLPRIV_V2` i `SETXATTR_EXT`; bez nich start jest
 odrzucany. `HANDLE_KILLPRIV_V2` przekazuje FOD informację, że Linux usuwa
 uprawnienia uprzywilejowane wskutek zapisu, truncate, chown lub `O_TRUNC`.
@@ -75,7 +79,7 @@ jawna nieuprzywilejowana próba `removexattr()` jest odrzucana przez Linux przed
 FUSE. W takim przebiegu usunięcie xattr jest osobną transakcją, poprzedzającą
 transakcję danych; obie są serializowane przez PostgreSQL. `SETXATTR_EXT`
 dostarcza flagę czyszczenia SGID przy zmianie access ACL. Obsługa ACL żąda
-`POSIX_ACL` tylko jeśli ACL są włączone.
+`POSIX_ACL` i `DONT_MASK` tylko jeśli ACL są włączone.
 `MAX_PAGES` wpływa na maksymalny rozmiar requestu, ale nie jest wymagane do
 poprawności podstawowego mounta.
 

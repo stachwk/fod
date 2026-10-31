@@ -101,6 +101,19 @@ impl FuseCompatibilitySnapshot {
         Ok(snapshot)
     }
 
+    pub(crate) fn validate_acl_requirements(&self, acl_enabled: bool) -> io::Result<()> {
+        if acl_enabled
+            && self
+                .unsupported_capabilities
+                .intersects(InitFlags::FUSE_POSIX_ACL | InitFlags::FUSE_DONT_MASK)
+        {
+            return Err(io::Error::other(
+                "FOD ACL mount requires FUSE_POSIX_ACL and FUSE_DONT_MASK for POSIX ACL create-mode semantics",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn shared_monitor_stats(&self) -> SharedMonitorFuseCompatibilityStats {
         let kernel_page_size_bytes = system_page_size_bytes();
         let kernel_max_pages_limit = kernel_fuse_max_pages_limit();
@@ -222,7 +235,7 @@ fn format_optional_u64(value: Option<u64>) -> String {
 
 fn requested_capabilities(acl_enabled: bool) -> InitFlags {
     if acl_enabled {
-        FOD_BASE_REQUESTED_CAPABILITIES | InitFlags::FUSE_POSIX_ACL
+        FOD_BASE_REQUESTED_CAPABILITIES | InitFlags::FUSE_POSIX_ACL | InitFlags::FUSE_DONT_MASK
     } else {
         FOD_BASE_REQUESTED_CAPABILITIES
     }
@@ -378,8 +391,10 @@ mod tests {
 
     #[test]
     fn requests_posix_acl_only_when_acl_is_enabled() {
-        let available =
-            InitFlags::FUSE_POSIX_LOCKS | InitFlags::FUSE_FLOCK_LOCKS | InitFlags::FUSE_POSIX_ACL;
+        let available = InitFlags::FUSE_POSIX_LOCKS
+            | InitFlags::FUSE_FLOCK_LOCKS
+            | InitFlags::FUSE_POSIX_ACL
+            | InitFlags::FUSE_DONT_MASK;
         let disabled = FuseCompatibilitySnapshot::from_parts(
             Version(7, 38),
             available,
@@ -408,9 +423,34 @@ mod tests {
         assert!(enabled
             .requested_capabilities
             .contains(InitFlags::FUSE_POSIX_ACL));
+        assert!(!disabled
+            .requested_capabilities
+            .contains(InitFlags::FUSE_DONT_MASK));
+        assert!(enabled
+            .requested_capabilities
+            .contains(InitFlags::FUSE_DONT_MASK));
         assert!(enabled
             .enabled_capabilities
             .contains(InitFlags::FUSE_POSIX_ACL));
+        assert!(enabled
+            .enabled_capabilities
+            .contains(InitFlags::FUSE_DONT_MASK));
+
+        let missing_dont_mask = FuseCompatibilitySnapshot::from_parts(
+            Version(7, 38),
+            available & !InitFlags::FUSE_DONT_MASK,
+            DEFAULT_FUSE_MAX_WRITE_BYTES,
+            DEFAULT_FUSE_MAX_WRITE_BYTES,
+            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            true,
+        );
+        assert!(missing_dont_mask
+            .validate_acl_requirements(true)
+            .unwrap_err()
+            .to_string()
+            .contains("FUSE_DONT_MASK"));
+        assert!(missing_dont_mask.validate_acl_requirements(false).is_ok());
     }
 
     #[test]

@@ -416,7 +416,15 @@ ACL and mode changes therefore serialize against creation authorization.
 `cargo check --workspace --offline` and rustfmt validation passed. The mounted
 `make test-acl-mount-option` regression now passes against this implementation:
 it sets and reads a POSIX access ACL, checks the resulting mode and access
-decisions, validates default ACL inheritance, and confirms denied access.
+decisions, validates default ACL inheritance and creation-mode filtering through
+a nested directory, and confirms denied access. FOD 3.4.435 fixes umask handling
+for ACL-enabled creates: the mount negotiates `FUSE_DONT_MASK` alongside
+`FUSE_POSIX_ACL`, so Linux preserves the requested mode and passes umask to FOD.
+Under a default ACL, FOD filters that requested mode; without one it applies
+umask in the same PostgreSQL transaction that reads the parent. The regression
+exercises capability negotiation, named-user/group-class entries, the
+ignored-umask case, child directories retaining the unfiltered default ACL,
+and mode-filtered nested files.
 `make test-xattr` and `make test-ioctl` also pass on the mounted filesystem;
 the xattr test uses its documented compatibility fallback for namespaces that
 the host denies. `FIONREAD` is exercised through FUSE. `FICLONE` returns the

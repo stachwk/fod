@@ -12003,6 +12003,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
+            0,
             None,
             false,
         )
@@ -12013,6 +12014,7 @@ impl DbRepo {
         target_parent_id: Option<u64>,
         target_name: &str,
         mode: u32,
+        umask: u32,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -12025,6 +12027,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
+            umask,
             Some((uid, gid, actor_groups)),
             true,
         )
@@ -12047,6 +12050,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
+            0,
             Some((uid, gid, supplementary_groups)),
             false,
         )
@@ -12060,6 +12064,7 @@ impl DbRepo {
         uid: u32,
         gid: u32,
         inode_seed: &str,
+        umask: u32,
         parent_actor: Option<(u32, u32, &[u32])>,
         inherit_default_acl: bool,
     ) -> Result<u64, String> {
@@ -12131,20 +12136,17 @@ impl DbRepo {
                 expected_gid = effective_gid;
                 let gid = CString::new(effective_gid.to_string())
                     .map_err(|_| "gid contains NUL byte".to_string())?;
-                let inherited_acl = if inherit_default_acl {
+                let (effective_mode, inherited_acl) = if inherit_default_acl {
                     xattrs::prepare_default_acl_inheritance_on_conn(
                         conn,
                         target_parent_id,
                         inherited_mode,
+                        umask,
                         true,
                     )?
                 } else {
-                    None
+                    (inherited_mode, None)
                 };
-                let effective_mode = inherited_acl
-                    .as_ref()
-                    .map(|acl| acl.mode)
-                    .unwrap_or(inherited_mode);
                 expected_mode = format!("{effective_mode:o}");
                 let mode = CString::new(expected_mode.clone())
                     .map_err(|_| "mode contains NUL byte".to_string())?;
@@ -12228,6 +12230,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
+            0,
             None,
             false,
         )
@@ -12238,6 +12241,7 @@ impl DbRepo {
         target_parent_id: Option<u64>,
         target_name: &str,
         mode: u32,
+        umask: u32,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -12250,6 +12254,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
+            umask,
             Some((uid, gid, actor_groups)),
             true,
         )
@@ -12272,6 +12277,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
+            0,
             Some((uid, gid, supplementary_groups)),
             false,
         )
@@ -12285,6 +12291,7 @@ impl DbRepo {
         uid: u32,
         gid: u32,
         inode_seed: &str,
+        umask: u32,
         parent_actor: Option<(u32, u32, &[u32])>,
         inherit_default_acl: bool,
     ) -> Result<u64, String> {
@@ -12364,20 +12371,17 @@ impl DbRepo {
                 expected_gid = effective_gid;
                 let gid = CString::new(effective_gid.to_string())
                     .map_err(|_| "gid contains NUL byte".to_string())?;
-                let inherited_acl = if inherit_default_acl {
+                let (effective_mode, inherited_acl) = if inherit_default_acl {
                     xattrs::prepare_default_acl_inheritance_on_conn(
                         conn,
                         target_parent_id,
                         inherited_mode,
+                        umask,
                         false,
                     )?
                 } else {
-                    None
+                    (inherited_mode, None)
                 };
-                let effective_mode = inherited_acl
-                    .as_ref()
-                    .map(|acl| acl.mode)
-                    .unwrap_or(inherited_mode);
                 expected_mode = format!("{effective_mode:o}");
                 let mode = CString::new(expected_mode.clone())
                     .map_err(|_| "mode contains NUL byte".to_string())?;
@@ -12497,6 +12501,7 @@ impl DbRepo {
             file_kind,
             rdev_major,
             rdev_minor,
+            0,
             None,
             false,
         )
@@ -12508,6 +12513,7 @@ impl DbRepo {
         target_parent_id: Option<u64>,
         target_name: &str,
         mode: u32,
+        umask: u32,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -12526,6 +12532,7 @@ impl DbRepo {
             file_kind,
             rdev_major,
             rdev_minor,
+            umask,
             Some((uid, gid, actor_groups)),
             true,
         )
@@ -12555,6 +12562,7 @@ impl DbRepo {
             file_kind,
             rdev_major,
             rdev_minor,
+            0,
             Some((uid, gid, supplementary_groups)),
             false,
         )
@@ -12572,6 +12580,7 @@ impl DbRepo {
         file_kind: &str,
         rdev_major: u32,
         rdev_minor: u32,
+        umask: u32,
         parent_actor: Option<(u32, u32, &[u32])>,
         inherit_default_acl: bool,
     ) -> Result<u64, String> {
@@ -12667,20 +12676,17 @@ impl DbRepo {
                 expected_gid = effective_gid;
                 let gid = CString::new(effective_gid.to_string())
                     .map_err(|_| "gid contains NUL byte".to_string())?;
-                let inherited_acl = if inherit_default_acl {
+                let (effective_mode, inherited_acl) = if inherit_default_acl {
                     xattrs::prepare_default_acl_inheritance_on_conn(
                         conn,
                         target_parent_id,
                         inherited_mode,
+                        umask,
                         false,
                     )?
                 } else {
-                    None
+                    (inherited_mode, None)
                 };
-                let effective_mode = inherited_acl
-                    .as_ref()
-                    .map(|acl| acl.mode)
-                    .unwrap_or(inherited_mode);
                 expected_mode = format!("{effective_mode:o}");
                 let mode = CString::new(expected_mode.clone())
                     .map_err(|_| "mode contains NUL byte".to_string())?;

@@ -17,7 +17,6 @@ use std::ffi::CString;
 pub(super) struct InheritedPosixAcl {
     pub(super) access_acl: Vec<u8>,
     pub(super) default_acl: Option<Vec<u8>>,
-    pub(super) mode: u32,
 }
 
 /// Apply chmod's owner, group-class and other bits to an existing access ACL.
@@ -262,8 +261,9 @@ pub(super) fn prepare_default_acl_inheritance_on_conn(
     conn: *mut super::PGconn,
     parent_id: Option<u64>,
     requested_mode: u32,
+    umask: u32,
     child_is_directory: bool,
-) -> Result<Option<InheritedPosixAcl>, String> {
+) -> Result<(u32, Option<InheritedPosixAcl>), String> {
     let parent_id = if let Some(parent_id) = parent_id {
         CString::new(parent_id.to_string())
             .map_err(|_| "parent id contains NUL byte".to_string())?
@@ -294,17 +294,19 @@ pub(super) fn prepare_default_acl_inheritance_on_conn(
         .first()
         .cloned();
     let Some(encoded) = encoded else {
-        return Ok(None);
+        return Ok((requested_mode & !umask, None));
     };
     let default_acl = BASE64_STANDARD
         .decode(encoded.trim())
         .map_err(|err| format!("invalid parent POSIX ACL payload: {err}"))?;
     let (access_acl, mode) = constrain_default_acl_to_mode(&default_acl, requested_mode)?;
-    Ok(Some(InheritedPosixAcl {
-        access_acl,
-        default_acl: child_is_directory.then_some(default_acl),
+    Ok((
         mode,
-    }))
+        Some(InheritedPosixAcl {
+            access_acl,
+            default_acl: child_is_directory.then_some(default_acl),
+        }),
+    ))
 }
 
 pub(super) fn store_inherited_default_acl_on_conn(

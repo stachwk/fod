@@ -16,9 +16,15 @@ FOD 3.4.431 extends these checks to verify committed namespace changes and
 rejected-operation preservation from both mounts. FOD 3.4.432 adds FIFO/file
 replacement cases and verifies the resulting type and cross-mount visibility.
 FOD 3.4.433 adds a sticky-directory rename denial check: unprivileged rename
-returns `EPERM` and preserves both entries. FOD 3.4.434 verifies that owning only the source or only the destination
-still returns `EPERM`, while owning both permits the rename. P08 remains open
-for other POSIX requirements and error cases.
+returns `EPERM` and preserves both entries. FOD 3.4.434 verifies that owning
+only the source or only the destination still returns `EPERM`, while owning
+both permits the rename. FOD 3.4.435 fixes umask handling with POSIX ACLs: ACL
+mounts negotiate `FUSE_DONT_MASK` with `FUSE_POSIX_ACL`, because Linux otherwise
+applies umask before the FOD callback. A parent default ACL filters the original
+requested creation mode; without one, FOD applies umask inside the primary
+transaction. Mounted coverage checks capability negotiation, ACL filtering,
+directory inheritance and nested files. P07 remains open for other POSIX
+permission and identity requirements.
 
 ## Runtime architecture
 

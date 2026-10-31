@@ -7,7 +7,7 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.434. FOD 3.4.415 raised the enforced Linux
+Reviewed source baseline: FOD 3.4.435. FOD 3.4.415 raised the enforced Linux
 minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
 mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
 parsing reject malformed numeric fields while retaining distribution suffixes
@@ -35,6 +35,12 @@ remaining POSIX requirements and error cases. The preceding release
 implements and verifies Linux FUSE killpriv handling for write, truncate,
 `O_TRUNC` and ACL updates; these changes do not close a broader POSIX matrix
 area.
+FOD 3.4.435 fixes ACL-enabled create mode handling: ACL mounts require negotiated
+`FUSE_POSIX_ACL` and `FUSE_DONT_MASK`, so Linux passes the original mode and
+umask to FOD. A default ACL filters the original requested mode; without one,
+FOD applies umask in the primary transaction. Mounted checks cover capability
+negotiation, file and directory creation, and recursive inheritance. P07
+remains Pending for the rest of the permissions and identity contract.
 The POSIX audit remains open; the preceding copy-source fencing fix improves
 multi-host data correctness but does not close a POSIX audit area. The latest
 POSIX-specific mounted evidence remains the individually versioned cases

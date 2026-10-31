@@ -1913,3 +1913,25 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL 16.15.
 - [ ] P08 remains Pending for other rename permission/error-precedence cases,
   limits, and broader cross-mount coverage.
+
+## FOD 3.4.435 — honor umask with inherited POSIX ACLs
+
+- [x] A mounted regression with process umask `077`, requested create mode
+  `0666`, and a default ACL reproduced a `0600` result. Linux v6.17 applies
+  umask in the FUSE create path unless the daemon explicitly negotiates
+  `FUSE_DONT_MASK`; `FUSE_POSIX_ACL` alone does not disable masking. FOD had
+  neither requested that capability nor preserved the original mode through
+  default-ACL lookup. ACL mounts now require and negotiate both
+  `FUSE_POSIX_ACL` and `FUSE_DONT_MASK`. In the same PostgreSQL namespace
+  transaction, the ACL inheritance helper filters original mode when a default
+  ACL exists and applies umask when none exists. File, directory and
+  special-file create paths pass the umask through this transaction. The
+  mounted regression verifies capability negotiation, ignored umask,
+  requested-mode filtering, child-directory preservation of the unfiltered
+  default ACL and nested-file inheritance. It passed on Linux
+  6.17.0-41-generic/libfuse3 3.18.2/PostgreSQL 16.15 with an isolated database,
+  which was dropped afterward.
+  Sources: [Linux FUSE initialization](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
+  [Linux FUSE create](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/dir.c),
+  [POSIX ACL create filtering](https://github.com/torvalds/linux/blob/v6.17/fs/posix_acl.c#L2921-L3019).
+- [ ] P07 remains Pending for the rest of the permission and identity matrix.

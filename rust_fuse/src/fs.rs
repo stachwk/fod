@@ -5003,6 +5003,7 @@ impl FodFuse {
         parent_id: Option<u64>,
         name: &str,
         mode: u32,
+        umask: u32,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -5015,6 +5016,7 @@ impl FodFuse {
                 parent_id,
                 name,
                 mode,
+                umask,
                 uid,
                 gid,
                 inode_seed,
@@ -5040,6 +5042,7 @@ impl FodFuse {
         parent_id: Option<u64>,
         name: &str,
         mode: u32,
+        umask: u32,
         uid: u32,
         gid: u32,
         supplementary_groups: &[u32],
@@ -5158,6 +5161,7 @@ impl FodFuse {
                 parent_id,
                 name,
                 mode,
+                umask,
                 uid,
                 gid,
                 &inode_seed,
@@ -5815,6 +5819,7 @@ impl Filesystem for FodFuse {
                 "writable FOD mount requires FUSE_HANDLE_KILLPRIV_V2 and FUSE_SETXATTR_EXT for Linux privilege-bit semantics",
             ));
         }
+        snapshot.validate_acl_requirements(self.acl_enabled)?;
         let mut compatibility = self
             .fuse_compatibility
             .write()
@@ -8512,7 +8517,11 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let mut mode = mode & !umask;
+        let mut mode = if self.acl_enabled {
+            mode
+        } else {
+            mode & !umask
+        };
         if !subject.is_root() {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
@@ -8541,6 +8550,7 @@ impl Filesystem for FodFuse {
                 parent_id,
                 target_name.as_ref(),
                 mode,
+                umask,
                 subject.uid,
                 subject.gid,
                 &inode_seed,
@@ -9350,7 +9360,10 @@ impl Filesystem for FodFuse {
         };
         // FUSE CREATE passes the full file mode, including S_IFREG. Store only
         // POSIX permission and special bits in the database mode column.
-        let mut mode = (mode & 0o7777) & !umask;
+        let mut mode = mode & 0o7777;
+        if !self.acl_enabled {
+            mode &= !umask;
+        }
         if !subject.is_root() {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
@@ -9363,6 +9376,7 @@ impl Filesystem for FodFuse {
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
+                umask,
                 subject.uid,
                 subject.gid,
                 &supplementary_groups,
@@ -9394,6 +9408,7 @@ impl Filesystem for FodFuse {
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
+                umask,
                 subject.uid,
                 subject.gid,
                 &inode_seed,
@@ -10652,7 +10667,10 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            let mut mode = (mode & !umask) & !libc::S_IFMT;
+            let mut mode = mode & !libc::S_IFMT;
+            if !self.acl_enabled {
+                mode &= !umask;
+            }
             if !subject.is_root() {
                 mode &= !(libc::S_ISUID | libc::S_ISGID);
             }
@@ -10668,6 +10686,7 @@ impl Filesystem for FodFuse {
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
+                umask,
                 subject.uid,
                 subject.gid,
                 &inode_seed,
@@ -10706,7 +10725,10 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let mut mode = (mode & !umask) & !libc::S_IFMT;
+        let mut mode = mode & !libc::S_IFMT;
+        if !self.acl_enabled {
+            mode &= !umask;
+        }
         if !subject.is_root() {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
@@ -10734,6 +10756,7 @@ impl Filesystem for FodFuse {
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
+                umask,
                 subject.uid,
                 subject.gid,
                 &inode_seed,

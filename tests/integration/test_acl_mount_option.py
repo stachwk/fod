@@ -94,6 +94,7 @@ def build_named_user_acl(
     permissions: int,
     *,
     user_obj: int = 0o0,
+    group_obj: int = 0o0,
     mask: int | None = None,
     other: int = 0o0,
 ) -> bytes:
@@ -102,7 +103,7 @@ def build_named_user_acl(
     acl = bytearray(struct.pack("<I", 0x0002))
     acl.extend(struct.pack("<HHI", 0x0001, user_obj & 0o7, 0xFFFFFFFF))
     acl.extend(struct.pack("<HHI", 0x0002, permissions & 0o7, uid))
-    acl.extend(struct.pack("<HHI", 0x0004, 0o0, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0004, group_obj & 0o7, 0xFFFFFFFF))
     acl.extend(struct.pack("<HHI", 0x0010, mask & 0o7, 0xFFFFFFFF))
     acl.extend(struct.pack("<HHI", 0x0020, other & 0o7, 0xFFFFFFFF))
     return bytes(acl)
@@ -613,6 +614,7 @@ def main() -> None:
                 log_text = log_path.read_text(encoding="utf-8")
                 assert "acl_enabled=true" in log_text, log_text
                 assert_capability_enabled(log_text, "POSIX_ACL")
+                assert_capability_enabled(log_text, "DONT_MASK")
                 if selinux_mode == "on":
                     assert "selinux_enabled=true" in log_text, log_text
 
@@ -734,6 +736,109 @@ def main() -> None:
                 child_path.write_bytes(b"inherited acl\n")
                 assert os.getxattr(child_path, "system.posix_acl_access") == allow_acl
 
+                inherited_default_acl = build_named_user_acl(
+                    nobody_uid,
+                    0o7,
+                    user_obj=0o7,
+                    group_obj=0o7,
+                    mask=0o7,
+                    other=0o7,
+                )
+                filtered_file_acl = build_named_user_acl(
+                    nobody_uid,
+                    0o7,
+                    user_obj=0o6,
+                    group_obj=0o7,
+                    mask=0o4,
+                    other=0o0,
+                )
+                filtered_directory_acl = build_named_user_acl(
+                    nobody_uid,
+                    0o7,
+                    user_obj=0o7,
+                    group_obj=0o7,
+                    mask=0o5,
+                    other=0o0,
+                )
+                filtered_nested_file_acl = build_named_user_acl(
+                    nobody_uid,
+                    0o7,
+                    user_obj=0o6,
+                    group_obj=0o7,
+                    mask=0o6,
+                    other=0o0,
+                )
+                inheritance_dir = mountpoint / f"acl-inheritance-{suffix}"
+                inheritance_dir.mkdir(mode=0o777)
+                os.setxattr(
+                    inheritance_dir,
+                    "system.posix_acl_default",
+                    inherited_default_acl,
+                )
+
+                filtered_file = inheritance_dir / "filtered-file"
+                fd = os.open(
+                    filtered_file,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o640,
+                )
+                os.close(fd)
+                assert stat.S_IMODE(filtered_file.stat().st_mode) == 0o640
+                assert (
+                    os.getxattr(filtered_file, "system.posix_acl_access")
+                    == filtered_file_acl
+                )
+
+                umask_file = inheritance_dir / "umask-ignored-with-default-acl"
+                previous_umask = os.umask(0o077)
+                try:
+                    fd = os.open(
+                        umask_file,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o666,
+                    )
+                finally:
+                    os.umask(previous_umask)
+                os.close(fd)
+                umask_file_acl = build_named_user_acl(
+                    nobody_uid,
+                    0o7,
+                    user_obj=0o6,
+                    group_obj=0o7,
+                    mask=0o6,
+                    other=0o6,
+                )
+                assert stat.S_IMODE(umask_file.stat().st_mode) == 0o666
+                assert (
+                    os.getxattr(umask_file, "system.posix_acl_access")
+                    == umask_file_acl
+                )
+
+                child_directory = inheritance_dir / "child-directory"
+                child_directory.mkdir(mode=0o750)
+                assert stat.S_IMODE(child_directory.stat().st_mode) == 0o750
+                assert (
+                    os.getxattr(child_directory, "system.posix_acl_access")
+                    == filtered_directory_acl
+                )
+                assert (
+                    os.getxattr(child_directory, "system.posix_acl_default")
+                    == inherited_default_acl
+                )
+
+                nested_file = child_directory / "nested-file"
+                fd = os.open(
+                    nested_file,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o660,
+                )
+                os.close(fd)
+                assert stat.S_IMODE(nested_file.stat().st_mode) == 0o660
+                assert (
+                    os.getxattr(nested_file, "system.posix_acl_access")
+                    == filtered_nested_file_acl
+                )
+
                 assert_parent_acl_denies_namespace_mutations(mountpoint, suffix)
 
                 deny_acl = build_posix_acl(user_perm=0o0, group_perm=0o0, other_perm=0o0)
@@ -755,6 +860,8 @@ def main() -> None:
                     "OK acl-mount-option utimens_invalid_nsec=EINVAL "
                     "acl_open_malformed_acl_errno=EINVAL "
                     "acl_denied_truncate_errno=EACCES "
+                    "default_acl_mode_filter=1 default_acl_ignores_umask=1 "
+                    "nested_directory_inheritance=1 "
                     "parent_namespace_create_unlink_rmdir_rename=EACCES"
                 )
             finally:
