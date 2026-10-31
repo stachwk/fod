@@ -21,6 +21,7 @@ POST_CREATE_BARRIER_ENV = "FOD_TEST_CREATE_AFTER_COMMIT_BARRIER_DIR"
 OPEN_INODE_BARRIER_ENV = "FOD_TEST_OPEN_AFTER_INODE_VALIDATION_BARRIER_DIR"
 PARENT_ID_BARRIER_ENV = "FOD_TEST_PARENT_ID_AFTER_VALIDATION_BARRIER_DIR"
 UNLINK_JOURNAL_BARRIER_ENV = "FOD_TEST_UNLINK_BEFORE_JOURNAL_BARRIER_DIR"
+RENAME_SOURCE_ATTRS_FAILURE_ENV = "FOD_TEST_RENAME_SOURCE_ATTRS_FAILURE_DIR"
 
 
 def sql_quote(value: str) -> str:
@@ -209,15 +210,23 @@ def main() -> None:
             parent_id_barrier_dir.mkdir()
             unlink_journal_barrier_dir = temp / "unlink-journal-barrier"
             unlink_journal_barrier_dir.mkdir()
+            rename_source_attrs_failure_dir = temp / "rename-source-attrs-failure"
+            rename_source_attrs_failure_dir.mkdir()
 
             previous_post_create_barrier = os.environ.get(POST_CREATE_BARRIER_ENV)
             previous_open_inode_barrier = os.environ.get(OPEN_INODE_BARRIER_ENV)
             previous_parent_id_barrier = os.environ.get(PARENT_ID_BARRIER_ENV)
             previous_unlink_journal_barrier = os.environ.get(UNLINK_JOURNAL_BARRIER_ENV)
+            previous_rename_source_attrs_failure = os.environ.get(
+                RENAME_SOURCE_ATTRS_FAILURE_ENV
+            )
             os.environ[POST_CREATE_BARRIER_ENV] = str(post_create_barrier_dir)
             os.environ[OPEN_INODE_BARRIER_ENV] = str(open_inode_barrier_dir)
             os.environ[PARENT_ID_BARRIER_ENV] = str(parent_id_barrier_dir)
             os.environ[UNLINK_JOURNAL_BARRIER_ENV] = str(unlink_journal_barrier_dir)
+            os.environ[RENAME_SOURCE_ATTRS_FAILURE_ENV] = str(
+                rename_source_attrs_failure_dir
+            )
             try:
                 launcher_a.start(str(mount_a_dir), log_prefix="/tmp/fod-create-own-a")
             finally:
@@ -237,6 +246,12 @@ def main() -> None:
                     os.environ.pop(UNLINK_JOURNAL_BARRIER_ENV, None)
                 else:
                     os.environ[UNLINK_JOURNAL_BARRIER_ENV] = previous_unlink_journal_barrier
+                if previous_rename_source_attrs_failure is None:
+                    os.environ.pop(RENAME_SOURCE_ATTRS_FAILURE_ENV, None)
+                else:
+                    os.environ[RENAME_SOURCE_ATTRS_FAILURE_ENV] = (
+                        previous_rename_source_attrs_failure
+                    )
 
             previous_barrier = os.environ.get(BARRIER_ENV)
             os.environ[BARRIER_ENV] = str(barrier_dir)
@@ -348,6 +363,35 @@ def main() -> None:
             (lookup_parent_b / "visible").unlink()
             lookup_parent_b.rmdir()
             print("OK stale-parent-lookup-replacement errno=ENOENT")
+
+            rename_attrs_name = f"rename-source-attrs-{uuid.uuid4().hex}.bin"
+            rename_attrs_source = mount_a_dir / rename_attrs_name
+            rename_attrs_destination = mount_a_dir / f"{rename_attrs_name}.moved"
+            rename_attrs_source.write_bytes(b"preserve source on metadata error")
+            source_ino_before = rename_attrs_source.stat().st_ino
+            (rename_source_attrs_failure_dir / "target").write_text(
+                f"/{rename_attrs_name}", encoding="utf-8"
+            )
+            rename_thread, rename_result = start_operation(
+                lambda: rename_attrs_source.rename(rename_attrs_destination)
+            )
+            rename_attrs_errno = finish_operation(
+                rename_thread,
+                rename_result,
+                "rename source metadata query failure",
+            )
+            if rename_attrs_errno != errno.EIO:
+                raise AssertionError(
+                    "rename did not fail closed when source attributes were unavailable: "
+                    f"errno={rename_attrs_errno}, expected={errno.EIO}"
+                )
+            if not rename_attrs_source.exists() or rename_attrs_destination.exists():
+                raise AssertionError(
+                    "rename changed namespace after source attribute lookup failed"
+                )
+            if rename_attrs_source.stat().st_ino != source_ino_before:
+                raise AssertionError("source inode mapping changed after failed rename")
+            print("OK rename-source-attrs-failure errno=EIO namespace-preserved=1")
 
             unlink_race_name = f"unlink-journal-replacement-{uuid.uuid4().hex}.bin"
             unlink_path_a = mount_a_dir / unlink_race_name

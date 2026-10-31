@@ -115,6 +115,12 @@ Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.
 
+FOD 3.4.457 fixes rename's source inode cache handling: source attributes are
+loaded by the entry ID from authoritative resolution, and a failed read returns
+`EIO` before mutation instead of substituting root inode 1. The deterministic
+fault-injection regression and full two-mount create/write ownership test pass
+on the PostgreSQL 16.15 `BLCKSZ=32KiB` runtime.
+
 Schema 35 replaces unbounded indexer text B-tree keys with digest candidate
 indexes, full-value comparisons and PostgreSQL advisory serialization. The
 long-path integration regression passed with a 3000-byte source name and

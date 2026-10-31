@@ -5186,6 +5186,33 @@ impl FodFuse {
         Ok(())
     }
 
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_rename_source_attrs_failure(path: &str) -> Result<bool, libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_RENAME_SOURCE_ATTRS_FAILURE_DIR") else {
+            return Ok(false);
+        };
+        if barrier_dir.trim().is_empty() {
+            return Ok(false);
+        }
+
+        let target = match fs::read_to_string(PathBuf::from(barrier_dir).join("target")) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => {
+                warn!(
+                    "FOD test rename source-attrs target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+        if target == path {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     // Integration-test-only deterministic rename race hook.
     // This code is absent from normal production builds.
     #[cfg(feature = "integration-test-hooks")]
@@ -9293,14 +9320,6 @@ impl Filesystem for FodFuse {
         };
         let old_name = name.to_string_lossy().to_string();
         let new_name = newname.to_string_lossy().to_string();
-        let source_attrs = self
-            .attrs_for_path_from_repo(&authority, &old_path)
-            .ok()
-            .flatten();
-        let old_ino = source_attrs
-            .as_ref()
-            .map(|attrs| attrs.file_attr.ino.0)
-            .unwrap_or(ROOT_INO);
         if old_path != new_path {
             let existing = match resolve(&new_path) {
                 Ok(value) => value,
@@ -9423,6 +9442,48 @@ impl Filesystem for FodFuse {
                             EIO,
                             format!("old_path={} missing namespace source id", old_path),
                         );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                };
+
+                let old_ino = match (kind.as_deref(), entry_id) {
+                    (Some(source_kind), Some(source_id)) => {
+                        let source_attrs = {
+                            #[cfg(feature = "integration-test-hooks")]
+                            {
+                                match Self::test_rename_source_attrs_failure(&old_path) {
+                                    Ok(true) => Err(EIO),
+                                    Ok(false) => self.attrs_for_entry_id_from_repo(
+                                        &authority,
+                                        source_kind,
+                                        source_id,
+                                    ),
+                                    Err(errno) => Err(errno),
+                                }
+                            }
+                            #[cfg(not(feature = "integration-test-hooks"))]
+                            {
+                                self.attrs_for_entry_id_from_repo(
+                                    &authority,
+                                    source_kind,
+                                    source_id,
+                                )
+                            }
+                        };
+                        match source_attrs {
+                            Ok(Some(attrs)) => attrs.file_attr.ino.0,
+                            Ok(None) => {
+                                fuse_reply_error!(reply, ENOENT);
+                                return;
+                            }
+                            Err(errno) => {
+                                fuse_reply_error!(reply, errno);
+                                return;
+                            }
+                        }
+                    }
+                    _ => {
                         fuse_reply_error!(reply, EIO);
                         return;
                     }

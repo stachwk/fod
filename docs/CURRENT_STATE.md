@@ -48,6 +48,11 @@ test recreates the name before journal insertion and verifies the single
 full create/write ownership test passed against PostgreSQL 16.15
 `BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
 
+FOD 3.4.457 binds `rename()`'s source inode to the entry ID already resolved by
+PostgreSQL. It now propagates source-attribute read errors before committing
+the rename instead of proceeding with `ROOT_INO` as a fallback that could
+poison local inode-to-path state.
+
 FOD 3.4.454 binds `poll()` metadata to the open handle's `file_id`, preserving
 read readiness after a remote unlink. Regular files also report read readiness
 at EOF. Mounted coverage for an empty file, an open-unlinked descriptor, and a

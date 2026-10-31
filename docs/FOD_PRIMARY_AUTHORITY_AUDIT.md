@@ -815,3 +815,18 @@ and journal insertion, creates a replacement through another mount, and
 verifies exactly one journal row records the unlink with no replacement file
 ID. The full test passed on FOD 3.4.456, PostgreSQL 16.15 `BLCKSZ=32KiB`, Linux
 6.17.0-41-generic and libfuse3 3.18.3.
+
+### `rename` source inode after metadata read failure
+
+The callback used a path-based attribute read only to obtain the source FUSE
+inode for local path-cache movement. It discarded read errors and substituted
+`ROOT_INO`. If the namespace transaction then succeeded, the cache could lose
+the source inode mapping and map the destination path to root. The callback now
+fetches attributes by the entry ID returned by the authoritative source
+resolution and returns the read error before starting the rename transaction.
+
+`test_create_write_ownership.py` injects an attribute-read failure for one
+source path, then requires `EIO`, unchanged source/destination bindings and an
+unchanged source inode. The full mounted `test_create_write_ownership.py`
+passed on FOD 3.4.457, PostgreSQL 16.15 `BLCKSZ=32KiB`, Linux
+6.17.0-41-generic and libfuse3 3.18.3; its disposable database was dropped.

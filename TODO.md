@@ -14,6 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`rename()` nie może kontynuować po błędzie odczytu inode źródła.**
+  Callback ignorował błąd odczytu atrybutów źródła i podstawiał `ROOT_INO` do
+  aktualizacji lokalnej mapy ścieżek po commicie `rename`. Mogło to usunąć
+  mapowanie inode źródła i przypisać ścieżkę docelową do inode roota. Atrybuty
+  są teraz pobierane po ID wpisu z wcześniejszego odczytu PostgreSQL, a błąd
+  przerywa mutację przed transakcją. Deterministyczny test wstrzykuje błąd
+  odczytu, wymaga `EIO` oraz niezmienionych nazw i inode. Pełny
+  `test_create_write_ownership.py` przeszedł na FOD 3.4.457, PostgreSQL 16.15
+  z `BLCKSZ=32KiB`, Linux 6.17.0-41-generic i libfuse3 3.18.3; baza testowa
+  została usunięta. Pierwsza próba użyła domyślnego hasła zamiast poświadczeń
+  kontenera i nie przeszła inicjalizacji; powtórka z poświadczeniami serwera
+  zakończyła się powodzeniem.
+
 - [x] **`unlink` nie może przypisać wpisu dziennika do zastępczego pliku.**
   Po commicie `unlink` callback ponownie rozwiązywał ścieżkę, aby pobrać
   `file_id`; inny mount mógł wcześniej utworzyć pod tą nazwą nowy plik. Test
