@@ -27,11 +27,15 @@ unsafe fn decode_optional_file_size(res: *mut PGresult) -> Result<Option<u64>, S
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows == 0 {
-                Ok(None)
-            } else if rows != 1 || cols != 1 {
+            if cols != 1 {
                 Err(format!(
-                    "invalid file size row: expected 1 row and 1 column, got {rows} rows and {cols} columns"
+                    "invalid file size result: expected 1 column, got {cols}"
+                ))
+            } else if rows == 0 {
+                Ok(None)
+            } else if rows != 1 {
+                Err(format!(
+                    "invalid file size row: expected 1 row, got {rows} rows"
                 ))
             } else if PQgetisnull(res, 0, 0) != 0 {
                 Err("file size is NULL".to_string())
@@ -129,10 +133,16 @@ unsafe fn fetch_single_block_binary(
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows == 0 {
+            if cols != 1 {
+                Err(format!(
+                    "invalid single block result: expected 1 column, got {cols}"
+                ))
+            } else if rows == 0 {
                 Ok(None)
-            } else if rows != 1 || cols != 1 {
-                Err("invalid single block row returned by PostgreSQL".to_string())
+            } else if rows != 1 {
+                Err(format!(
+                    "invalid single block result: expected 1 row, got {rows} rows"
+                ))
             } else if PQgetisnull(res, 0, 0) != 0 {
                 Err("data block payload is NULL".to_string())
             } else {
@@ -168,10 +178,14 @@ unsafe fn fetch_block_range_rows_shared(
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows == 0 {
+            if cols != 2 {
+                Err(format!(
+                    "invalid block range result: expected 2 columns, got {cols}"
+                ))
+            } else if rows == 0 {
                 Ok(Vec::new())
-            } else if rows < 0 || cols != 2 {
-                Err("invalid block range rows returned by PostgreSQL".to_string())
+            } else if rows < 0 {
+                Err("invalid block range row count returned by PostgreSQL".to_string())
             } else {
                 let mut blocks = Vec::with_capacity(rows as usize);
                 for row in 0..rows {
@@ -217,8 +231,11 @@ unsafe fn decode_generation_block_snapshot(
         if PQresultStatus(res) != PGRES_TUPLES_OK {
             return Err(result_error(res));
         }
-        if PQnfields(res) != 4 {
-            return Err("generation block snapshot column count mismatch".to_string());
+        let cols = PQnfields(res);
+        if cols != 4 {
+            return Err(format!(
+                "generation block snapshot column count mismatch: expected 4, got {cols}"
+            ));
         }
         let mut metadata = None;
         let mut blocks = Vec::new();
@@ -271,11 +288,16 @@ unsafe fn fetch_block_range_with_size_rows_shared(
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
+            if cols != 3 {
+                return Err(format!(
+                    "invalid fused file read result: expected 3 columns, got {cols}"
+                ));
+            }
             if rows == 0 {
                 return Ok(None);
             }
-            if rows < 0 || cols != 3 {
-                return Err("invalid fused file read rows returned by PostgreSQL".to_string());
+            if rows < 0 {
+                return Err("invalid fused file read row count returned by PostgreSQL".to_string());
             }
             let mut file_size = None;
             let mut blocks = Vec::with_capacity(rows.saturating_sub(1) as usize);

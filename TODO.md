@@ -937,6 +937,18 @@ Reading guide:
   Docker image, `pg_config --configure` (`--with-blocksize=32`) and live
   `SHOW block_size=32768`. This closes the generic multirow NULL-conversion
   question, not the broader PostgreSQL fault-injection work.
+  FOD 3.4.479 also validates exact result-column counts in the specialized
+  optional file-size, single-block, block-range and xattr readers before
+  returning their no-row/empty state. This prevents an unexpected zero-column
+  result from masquerading as a missing file, empty block set or absent xattr.
+  The first xattr test attempt against the configured admin endpoint was
+  correctly refused because that database is schema 31. A new disposable
+  admin database was initialized at schema 38; after adjusting older malformed
+  row assertions to accept the stricter NULL error and changing a whole-row
+  test comparison to `to_jsonb` (because ordinary text-row decoding now rejects
+  nullable columns), all 72 `pg_query` tests passed serially on PostgreSQL
+  16.15 with the verified `BLCKSZ=32KiB` build. The disposable admin database
+  was dropped after the run.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

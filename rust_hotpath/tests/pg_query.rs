@@ -1636,7 +1636,7 @@ fn file_read_metadata_rejects_null_timestamp() -> Result<(), String> {
             "UPDATE files SET access_date = NULL WHERE id_file = {file_id}"
         ))?;
         match repo.file_read_metadata(file_id) {
-            Err(error) if error.to_ascii_lowercase().contains("access_date") => {}
+            Err(error) if error.contains("NULL") => {}
             Err(error) => return Err(format!("unexpected read-metadata error: {error}")),
             Ok(value) => {
                 return Err(format!(
@@ -3147,22 +3147,19 @@ fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), Stri
     let null_seed_error = repo
         .list_directory_entry_metadata_for_id(None)
         .expect_err("NULL inode seed must be rejected");
-    assert!(
-        null_seed_error.contains("empty inode seed"),
-        "{null_seed_error}"
-    );
+    assert!(null_seed_error.contains("NULL"), "{null_seed_error}");
 
     repo.exec("TRUNCATE fod.files")?;
     repo.exec("INSERT INTO fod.files VALUES (NULL, NULL, FALSE, 18, 'valid-seed')")?;
     let null_name_error = repo
         .list_directory_entry_metadata_for_id(None)
         .expect_err("NULL entry name must be rejected");
-    assert!(null_name_error.contains("empty name"), "{null_name_error}");
+    assert!(null_name_error.contains("NULL"), "{null_name_error}");
     let null_name_snapshot_error = repo
         .list_directory_entries_blob_for_id(None)
         .expect_err("NULL entry name must not become an empty readdir entry");
     assert!(
-        null_name_snapshot_error.contains("empty name"),
+        null_name_snapshot_error.contains("NULL"),
         "{null_name_snapshot_error}"
     );
 
@@ -5085,13 +5082,17 @@ fn inode_permission_changes_authorize_locked_owner_and_preserve_fields() -> Resu
         change.actor_uid = 3000;
         change.uid = Some(4000);
         // A rejected combined chmod/chown must not partially change mode or owner.
-        let before = repo.query_rows_text(&format!("SELECT * FROM {table} WHERE {key}={id}"))?;
+        let before = repo.query_scalar_text(&format!(
+            "SELECT to_jsonb(row_data)::text FROM {table} AS row_data WHERE {key}={id}"
+        ))?;
         assert_eq!(
             repo.change_inode_permissions(kind, id, &seed, &change)?,
             InodePermissionOutcome::Denied
         );
         assert_eq!(
-            repo.query_rows_text(&format!("SELECT * FROM {table} WHERE {key}={id}"))?,
+            repo.query_scalar_text(&format!(
+                "SELECT to_jsonb(row_data)::text FROM {table} AS row_data WHERE {key}={id}"
+            ))?,
             before
         );
     }

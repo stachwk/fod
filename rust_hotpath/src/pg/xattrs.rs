@@ -90,10 +90,14 @@ unsafe fn decode_xattr_name_rows(res: *mut super::PGresult) -> Result<Vec<String
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows == 0 {
+            if cols != 1 {
+                Err(format!(
+                    "invalid xattr name result: expected 1 column, got {cols}"
+                ))
+            } else if rows == 0 {
                 Ok(Vec::new())
-            } else if rows < 0 || cols < 1 {
-                Err("invalid xattr name rows returned by PostgreSQL".to_string())
+            } else if rows < 0 {
+                Err("invalid xattr name row count returned by PostgreSQL".to_string())
             } else {
                 let mut names = Vec::with_capacity(rows as usize);
                 let mut decode_error = None;
@@ -432,10 +436,16 @@ impl DbRepo {
                 PGRES_TUPLES_OK => {
                     let rows = PQntuples(res);
                     let cols = PQnfields(res);
-                    if rows == 0 {
+                    if cols != 1 {
+                        Err(format!(
+                            "invalid xattr value result: expected 1 column, got {cols}"
+                        ))
+                    } else if rows == 0 {
                         Ok(None)
-                    } else if rows != 1 || cols < 1 {
-                        Err("invalid xattr value row returned by PostgreSQL".to_string())
+                    } else if rows != 1 {
+                        Err(format!(
+                            "invalid xattr value result: expected at most 1 row, got {rows} rows"
+                        ))
                     } else if PQgetisnull(res, 0, 0) != 0 {
                         Err("xattr value row contains a NULL payload".to_string())
                     } else {

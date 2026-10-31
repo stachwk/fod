@@ -886,4 +886,10 @@ it passed against PostgreSQL 16.15 with `--with-blocksize=32` and live
 preserving valid empty strings. Its nullable consumers use explicit
 `COALESCE`; schema-backed metadata is non-NULL, and test cleanup filters the
 nullable data-object ID. `postgres_row_decoders_reject_null_and_malformed_shapes`
-passed on the same verified 32 KiB PostgreSQL build.
+passed on the same verified 32 KiB PostgreSQL build. FOD 3.4.479 extends exact
+column-count checks to specialized xattr, file-size and binary block readers,
+including zero-row results. The configured admin database is schema 31, so the
+first test attempt correctly stopped before assertions. A disposable schema-38
+admin database was initialized, all 72 `pg_query` tests passed serially on the
+verified PostgreSQL 16.15 `BLCKSZ=32KiB` build, and the disposable database was
+dropped afterward.

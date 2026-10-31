@@ -29,6 +29,11 @@ on the verified PostgreSQL 16.15 `BLCKSZ=32KiB` runtime. FOD 3.4.478 extends
 strict NULL and shape validation to general multirow results; its focused
 regression passed after checking the image, custom `pg_config` build flags and
 live 32768-byte page size. Continue the broader database fault-injection audit.
+FOD 3.4.479 extends exact result-shape checks to specialized xattr and block
+read decoders. All 72 `pg_query` tests passed serially against a disposable
+schema-38 admin database on the verified PostgreSQL 16.15 `BLCKSZ=32KiB` build;
+the configured schema-31 admin database was left unchanged and the disposable
+database was dropped after the run.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

@@ -25,13 +25,6 @@ or malformed result rows rather than silently producing empty values; optional
 scalar reads preserve the distinct zero-row case. Focused database regression
 coverage is in `scalar_text_decoders_distinguish_absent_null_and_malformed_results`.
 
-FOD 3.4.478 extends strict PostgreSQL result decoding to multirow text results:
-NULL fields and zero-column results now fail instead of appearing as empty
-values. Valid empty strings and zero-row queries with a defined result shape
-remain supported. The caller audit confirmed nullable outputs use `COALESCE`;
-the focused regression passed against the custom PostgreSQL 16.15 build with
-`--with-blocksize=32` and live `SHOW block_size=32768`.
-
 FOD 3.4.464 closes cached libpq connections when a repository's connection
 pools are dropped and reports a missing data-object reference count through the
 owning operation instead of losing that context in the scalar decoder. The
@@ -131,8 +124,13 @@ rows. The first-column decoder also checks that each returned value is
 non-NULL and that the query returns exactly one column. The regression
 `optional_row_decoder_rejects_null_and_multiple_rows` passed against the
 configured PostgreSQL 16.15 build after verifying `--with-blocksize=32` and
-`SHOW block_size=32768`. The generic multirow text decoder still represents
-NULL as an empty string and remains under audit.
+`SHOW block_size=32768`. FOD 3.4.478 extends strict decoding to multirow text
+results, rejecting NULL fields and zero-column results while preserving valid
+empty strings and zero-row queries with defined result shapes. FOD 3.4.479
+extends exact column-count validation to specialized xattr, file-size and block
+read decoders, including zero-row results. All 72 `pg_query` tests passed on a
+disposable schema-38 admin database against the verified PostgreSQL 16.15
+`BLCKSZ=32KiB` server; the database was dropped after testing.
 
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required
