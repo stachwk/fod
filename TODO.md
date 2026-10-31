@@ -450,7 +450,12 @@ Reading guide:
   in `release-lto` against a fresh disposable PostgreSQL 16.15 database on
   Linux 6.17/libfuse 3.17.4, including exact `EACCES` from libc `opendir()`,
   `mkdir()` and `rmdir()`. The temporary database was dropped; existing mounts
-  were left untouched.
+  were left untouched. The two-mount `test_readdir_snapshot_multimount.py` was
+  also run on FOD 3.4.428/Linux 6.17.0-41-generic/libfuse3 3.18.2 against an
+  isolated PostgreSQL 16.15 database; both `open()` and libc `opendir()` return
+  exact `EMFILE` after the process descriptor limit is exhausted. The database
+  was dropped and the pre-existing mounts were not touched. `ENFILE` and other
+  remaining directory-operation cases keep P02 open.
   Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
   `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
   symlink as `ENOTDIR` before calling FUSE; VFS also checks destination
@@ -1849,3 +1854,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   `UTIME_NOW`/`UTIME_OMIT` orders while asserting the omitted timestamp remains
   unchanged. This closes those specific test gaps only; invalid flags,
   precision boundaries, and the broader P06 metadata audit remain open.
+
+
+## FOD 3.4.429 — refresh POSIX directory-stream evidence
+
+- [x] Rerun the existing two-mount readdir snapshot test on FOD 3.4.428 and
+  record the `open()`/`opendir()` `EMFILE` evidence in the POSIX audit and errno
+  matrix. This closes the unrun-test gap only; P02 remains Pending for
+  system-wide `ENFILE` and remaining directory errors.

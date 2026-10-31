@@ -7,7 +7,7 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.428. FOD 3.4.415 raised the enforced Linux
+Reviewed source baseline: FOD 3.4.429. FOD 3.4.415 raised the enforced Linux
 minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
 mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
 parsing reject malformed numeric fields while retaining distribution suffixes
@@ -20,9 +20,11 @@ regression covers this failure boundary. FOD 3.4.428 expands mounted timestamp
 checks for invalid nanoseconds in both `utimensat()` fields and both mixed
 `UTIME_NOW`/`UTIME_OMIT` orders. It improves P06 evidence without changing the
 POSIX matrix status.
-The preceding release implements and verifies Linux FUSE killpriv handling for
-write, truncate, `O_TRUNC` and ACL updates; these changes do not close a broader
-POSIX matrix area.
+FOD 3.4.429 also records the mounted readdir snapshot regression on FOD 3.4.428,
+including `EMFILE` from both `open()` and `opendir()` under the process
+descriptor limit; P02 remains Pending. The preceding release implements and
+verifies Linux FUSE killpriv handling for write, truncate, `O_TRUNC` and ACL
+updates; these changes do not close a broader POSIX matrix area.
 The POSIX audit remains open; the preceding copy-source fencing fix improves
 multi-host data correctness but does not close a POSIX audit area. The latest
 POSIX-specific mounted evidence remains the individually versioned cases

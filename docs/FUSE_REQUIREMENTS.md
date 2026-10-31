@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.428. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.429. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.428. Zmiana w
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.429. Zmiana w
 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
 nowego zamontowanego przebiegu POSIX.
 

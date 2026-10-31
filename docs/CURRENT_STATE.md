@@ -61,6 +61,10 @@ The FUSE `open()` callback keeps ACL denial (`EACCES`) distinct from failed
 ACL metadata reads (`EIO`) and malformed stored ACL data (`EINVAL`). A unit
 regression covers the mapping, and `test_acl_mount_option.py` confirms mounted
 `EINVAL` plus the callback log after corrupting only the file's stored ACL.
+On FOD 3.4.428, `test_readdir_snapshot_multimount.py` also passed on Linux
+6.17.0-41/libfuse3 3.18.2 against a disposable PostgreSQL 16.15 database. It
+verifies cross-mount snapshot continuation and rewind, plus exact `EMFILE` from
+both `open()` and libc `opendir()` at the process descriptor limit.
 
 Logical-task admission has multithreaded unit coverage for FIFO order, capacity
 limits, queue progress as tasks finish, and balanced completion/failure metrics.
