@@ -676,6 +676,42 @@ impl DbRepo {
         last_block: u64,
         block_size: u64,
     ) -> Result<SizedSharedBlockRows, String> {
+        self.fetch_block_range_with_size_shared_on(
+            file_id,
+            first_block,
+            last_block,
+            block_size,
+            false,
+        )
+    }
+
+    /// Reads the file size and payload blocks from the write authority in one
+    /// snapshot. Use this when a stale replica read would violate the caller's
+    /// consistency contract.
+    pub fn fetch_block_range_with_size_authoritative_shared(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+    ) -> Result<SizedSharedBlockRows, String> {
+        self.fetch_block_range_with_size_shared_on(
+            file_id,
+            first_block,
+            last_block,
+            block_size,
+            true,
+        )
+    }
+
+    fn fetch_block_range_with_size_shared_on(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+        authoritative: bool,
+    ) -> Result<SizedSharedBlockRows, String> {
         let file_id_text = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let first_block_text = CString::new(first_block.to_string())
@@ -683,7 +719,7 @@ impl DbRepo {
         let last_block_text = CString::new(last_block.to_string())
             .map_err(|_| "block index contains NUL byte".to_string())?;
         let block_size = block_size.max(1) as usize;
-        self.with_read_connection(|conn| unsafe {
+        let query = |conn| unsafe {
             let params = [&file_id_text, &first_block_text, &last_block_text];
             let res = exec_prepared_params_with_result_format(
                 conn,
@@ -692,7 +728,12 @@ impl DbRepo {
                 1,
             )?;
             fetch_block_range_with_size_rows_shared(res, block_size)
-        })
+        };
+        if authoritative {
+            self.with_cached_connection(query)
+        } else {
+            self.with_read_connection(query)
+        }
     }
 
     pub fn fetch_block_range(

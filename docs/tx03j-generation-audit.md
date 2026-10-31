@@ -34,6 +34,11 @@ remote event, and no SQL fill started before invalidation may publish later.
 1. The generation-bearing read API is used by explicit degraded read-only
    FUSE reads, but is not integrated into the ordinary cached read path. It
    does not itself establish cross-mount cache coherence.
+   FOD 3.4.522 fixes a separate source-level gap in the opt-in
+   `FOD_CROSS_MOUNT_STRICT_READS` path: its uncached size-and-block snapshot now
+   uses the primary/write authority instead of replica-routed `with_read_connection`.
+   This prevents replica lag from defeating that diagnostic mode, but does not
+   add generation validation or invalidate the kernel page cache.
 2. Cache coherence also requires selective Linux FUSE kernel page-cache
    invalidation, and safe handling of open readers, local dirty buffers,
    and race ordering. Notifications are only hints; missing notifications

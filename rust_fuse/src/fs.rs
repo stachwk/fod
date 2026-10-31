@@ -4639,7 +4639,7 @@ impl FodFuse {
         let started = Instant::now();
         let snapshot = self
             .repo
-            .fetch_block_range_with_size_shared(
+            .fetch_block_range_with_size_authoritative_shared(
                 file_id,
                 first_block,
                 requested_last_block,
