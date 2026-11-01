@@ -61,7 +61,7 @@ reported gap is still present or that a proposed fix has passed acceptance.
 | --- | --- | --- |
 | PostgreSQL authority and mutation ordering | [Architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) | [Primary authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md), [C6 write fencing](FOD_C6_WRITE_FENCING_AUDIT.md) |
 | Filesystem API compatibility | [Compatibility status and contracts](compatibility-contracts.md) | [POSIX.1-2024 audit](POSIX_CONFORMANCE_AUDIT.md), [Linux/FUSE requirements](FUSE_REQUIREMENTS.md), [errno matrix](POSIX_ERRNO_MATRIX.md), [errno reference](ERRNO_REFERENCE.md) |
-| Cross-mount content coherence | [TX03J contract and stages](TX03J_CROSS_MOUNT_CACHE_COHERENCE.md) | [Generation coverage and remaining gates](tx03j-generation-audit.md) |
+| Cross-mount content coherence | [TX03J contract and stages](TX03J_CROSS_MOUNT_CACHE_COHERENCE.md) | [Generation coverage and remaining gates](tx03j-generation-audit.md); [J0–J7 implementation workstream](plans/TX03J_IMPLEMENTATION_PLAN.md) |
 | Standby availability and recovery | [HA/cache plan](plans/HA_READONLY_RECOVERY_AND_CACHE.md) | [Degraded read-only contract review](FOD_DEGRADED_READONLY_CONTRACT_REVIEW.md) |
 | Transaction boundaries and privileges | [Security](SECURITY.md), [runtime privilege policy](FOD_RUNTIME_PRIVILEGE_POLICY.md) | [C10 privilege audit](FOD_C10_POSTGRES_PRIVILEGE_AUDIT.md), [C10-B SQL inventory](FOD_C10B_SQL_MUTATION_INVENTORY.md), [C10-B2 transaction review](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md) |
 | Payload ownership | [Space accounting](space-accounting.md), [storage-format ADR](adr/storage-format-versioning.md) | [Payload ownership inventory](storage-payload-ownership-inventory.md) |

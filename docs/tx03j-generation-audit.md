@@ -78,6 +78,26 @@ tests remain outstanding. PostgreSQL integration tests must use an isolated,
 initialized database with `fod.config.block_size` and
 `fod.config.max_fs_size_bytes` set.
 
+## Research follow-up (2026-11-01, based on FOD 3.4.529)
+
+The schema required by current runtime is 39. Migration 0027 already enforces
+explicit +1 increments, and the reviewed persist/streaming/COW/hole-punch/
+size-change/adoption paths perform them atomically. Do not revert to timestamp-
+driven generation increments or edit historical migrations. The generational
+snapshot API uses `with_read_connection`, which may route to a lagging replica;
+only the separate explicit strict-read snapshot was routed to primary in 3.4.522.
+The default cached-read and kernel notification paths still lack a complete
+cross-mount protocol. FOD 3.4.529 fixes local disable/re-enable cache cleanup,
+but its runtime race regression remains unexecuted here.
+
+Implementation is tracked in [TX03J J0–J7 plan](plans/TX03J_IMPLEMENTATION_PLAN.md),
+with two mandatory design proofs before rollout: commit-safe durable replay
+(`BIGSERIAL` is not commit order) and an ACK that demonstrably establishes
+kernel-cache/in-flight-reader invalidation. The Docker primary was observed on
+host port 55441; authentication to it failed in prior diagnostics. That is an
+environmental blocker, not evidence of a SQL snapshot defect. Never run
+mutation tests against the production deployment database.
+
 ## Next architectural gate
 
 Next, wire a per-file event/reconcile ledger and selective FUSE kernel

@@ -49,6 +49,19 @@ obsługa `Notifier` jest obecnie tworzona tylko w specjalnej ścieżce
 integration-test hook. Callback `fsync()` opróżnia lokalny stan zapisu i
 odpowiada; nie wykonuje między-mount bariery.
 
+## Implementation handoff (2026-11-01)
+
+The detailed [J0–J7 implementation workstream](plans/TX03J_IMPLEMENTATION_PLAN.md)
+sets testable changes and completion gates. It preserves this contract as the
+source of truth. The current schema is 39; migrations 0026/0027 are immutable.
+**New design-review gate:** PostgreSQL sequence/BIGSERIAL allocation is not
+commit ordering: an outbox cursor must not skip an earlier-ID transaction
+committing after a later-ID transaction. Prove replay safety (for example,
+with a transactionally serialized counter or another verified commit-order
+protocol) before implementing the ledger. ACK must also have a verified
+kernel/in-flight-read meaning; merely queueing FUSE notification is not proof.
+These are prospective requirements, not implemented guarantees.
+
 ## Wymagany kontrakt
 
 PostgreSQL pozostaje autorytatywnym źródłem zawartości, generacji i kolejności
