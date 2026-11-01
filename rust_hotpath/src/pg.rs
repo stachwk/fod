@@ -14748,7 +14748,7 @@ impl DbRepo {
                             let object_id_text = CString::new(object_id.to_string())
                                 .map_err(|_| "data object id contains NUL byte".to_string())?;
                             let compare_block = CString::new(
-                                "SELECT COALESCE((SELECT data = $3::bytea FROM data_blocks \
+                                "SELECT COALESCE((SELECT COALESCE(data = $3::bytea, FALSE) FROM data_blocks \
                                  WHERE data_object_id=$1 AND _order=$2), $4::boolean)",
                             )
                             .map_err(|_| "SQL contains NUL byte".to_string())?;
