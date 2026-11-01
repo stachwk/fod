@@ -142,7 +142,7 @@ fn acl_has_permissions(
     Ok(other.unwrap_or(0) & requested == requested)
 }
 
-// Wyznacz mode po zgloszeniu KILL_SUIDGID bez zmiany pozostatych bitow.
+// Wyznacz mode po zgloszeniu KILL_SUIDGID bez zmiany pozostalych bitow.
 fn mode_after_kill_suidgid(current_mode: u32) -> u32 {
     let mut mode = current_mode & !0o4000;
     if current_mode & 0o2010 == 0o2010 {
@@ -168,7 +168,6 @@ mod tests {
         assert_eq!(mode_after_kill_suidgid(0o2745), 0o2745);
         assert_eq!(mode_after_kill_suidgid(0o6755), 0o755);
     }
-
 
     fn make_acl(entries: &[(u16, u16, u32)]) -> Vec<u8> {
         let mut acl = 2u32.to_le_bytes().to_vec();
