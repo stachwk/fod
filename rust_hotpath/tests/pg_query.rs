@@ -5064,7 +5064,10 @@ fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String>
     let mode = repo.query_scalar_text(&format!(
         "SELECT mode FROM files WHERE id_file = {file_id}"
     ))?;
-    assert_eq!(u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?, 0o644);
+    assert_eq!(
+        u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?,
+        0o644
+    );
 
     // Zapis z KILL_SUIDGID musi usunac SUID w tej samej transakcji.
     repo.update_file_mode(file_id, "4644")?;
@@ -5074,7 +5077,10 @@ fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String>
     let mode = repo.query_scalar_text(&format!(
         "SELECT mode FROM files WHERE id_file = {file_id}"
     ))?;
-    assert_eq!(u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?, 0o644);
+    assert_eq!(
+        u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?,
+        0o644
+    );
     Ok(())
 }
 
