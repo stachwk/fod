@@ -6420,7 +6420,7 @@ impl Filesystem for FodFuse {
                     // wlasciwy inode. Nie skanuj innych otwartych uchwytow:
                     // ich wiersze moga wlasnie znikac podczas deferred unlink.
                     // Fallback po file_id jest potrzebny tylko przy nlink=0.
-                    if attrs.file_attr.kind == FileType::RegularFile
+                    if matches!(attrs.file_attr.kind, FileType::RegularFile)
                         && attrs.file_attr.nlink == 0
                     {
                         match self.attrs_for_open_inode(ino) {
