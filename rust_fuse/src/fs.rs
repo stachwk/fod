@@ -4186,14 +4186,18 @@ impl FodFuse {
                     file_id, err
                 );
                 EIO
-            })?
-            .ok_or_else(|| {
-                warn!(
-                    "FOD open_file_attrs_error file_id={} phase=link_count_missing",
-                    file_id
-                );
-                EIO
             })?;
+        // Miedzy odczytem atrybutow i liczby dowiazan inny watek
+        // mogl zakonczyc deferred unlink i usunac wiersz pliku.
+        // Brak wiersza to zakonczona finalizacja, a nie blad SQL.
+        // Nie przerywaj przez to getattr dla innego otwartego inode.
+        let Some(nlink) = nlink else {
+            debug!(
+                "FOD open_file_attrs_finalized file_id={} phase=link_count_missing",
+                file_id
+            );
+            return Ok(None);
+        };
         let inode = self.stable_inode("file", &inode_seed, raw_inode)?;
         Ok(Some(ParsedAttrs {
             inode_seed,
