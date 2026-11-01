@@ -1,6 +1,7 @@
 *.py[cod]
 __pycache__/
 .vscode/
+# Lokalne narzedzia i biblioteki FOD (m.in. toolchains/libfuse), bez Git.
 .fod/
 AGENTS.md
 tests/integration/__pycache__/

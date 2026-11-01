@@ -36,6 +36,8 @@ PostgreSQL **primary** jest źródłem prawdy dla treści, tożsamości `file_id
 
 ### J0. Kontrola środowiska i pierwsze regresje
 
+**Stan 3.4.535 (toolchain):** po logach z `lt7300` kompilacja workspace oraz unit-test J0 (1/1) i `read_cache::tests` (9/9) przeszly z libfuse 3.18.3. Dodano projektowa sciezke `.fod/toolchains/libfuse-3.18.3` oraz skrypty instalacji/aktywacji; instalator wymaga uruchomienia na hoście. J0 integracyjne A/B/C nadal OPEN. Testy J1 z izolowana baza schema 39 nadal OPEN. Nie wykonywac migracji na `fod-postgres` (host port 5432, wczesniej schema 31) ani na produkcyjnym primary 55441.
+
 **Stan 3.4.534:** dopasowano format sygnatury testowej `ReadBlockCache::insert` do rustfmt. Walidacja na lt7300 nadal oczekiwana.
 
 **Stan 3.4.533:** poprawiono E0624: test J0 z modulu `fs` uzyskuje teraz dostep wewnatrz crate do `ReadBlockCache::get/insert`, bez zmiany algorytmu i bez publicznego API. Test J0 wymaga ponownej walidacji na lt7300.

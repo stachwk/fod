@@ -26,6 +26,28 @@ libraries fail startup. This floor includes the upstream io_uring fix shipped
 in 3.18.2. See [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md) for the test
 matrix and compatibility boundaries.
 
+For local builds on `lt7300`, libfuse 3.18.3 may be copied once from the
+validated isolated install in `/var/tmp` into the **Git-ignored** directory
+`./.fod/toolchains/libfuse-3.18.3`:
+
+```bash
+bash scripts/fod-local-libfuse-install.sh
+source scripts/fod-local-libfuse-env.sh
+pkg-config --modversion fuse3
+pkg-config --variable=libdir fuse3
+cargo check --workspace --locked
+```
+
+The installer rewrites the absolute `fuse3.pc` prefix and validates the
+relocated include/library paths. It does not overwrite an existing target,
+modify the system library, remove the original install or change PostgreSQL
+configuration. The environment script must be **sourced in each new shell**;
+it exports `PKG_CONFIG_PATH` for compilation and `LD_LIBRARY_PATH` for
+runtime/tests. These variables do not need to be committed or put in a global
+shell profile. Use the external source install only as a migration input, not
+as the active build path. Further details:
+[FUSE requirements](FUSE_REQUIREMENTS.md#lokalna-biblioteka-dla-dewelopera).
+
 Rust FUSE integration tests read `fod_config.ini` by default. Set
 `FOD_TEST_CONFIG` to a separate INI file to isolate their PostgreSQL database;
 the same file is passed to the spawned FOD tools. This is useful for tests

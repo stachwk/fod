@@ -181,12 +181,47 @@ poza pokryciem. Host systemowy raportuje libfuse 3.17.4, czyli poniżej
 wymaganego minimum. Usunięto lokalny Cargo/pkg-config override, który błędnie
 podawał 3.14.0 niezależnie od wybranej biblioteki. Przy budowaniu należy
 sprawdzać rzeczywisty plik `fuse3.pc` przez `pkg-config --variable=pcfiledir
-fuse3` i jego wersję przez `pkg-config --modversion fuse3`; builder FOD jawnie
-wybiera libfuse 3.18.3 przez `/usr/local/lib/pkgconfig`. Testowe buildy upstream
+fuse3` i jego wersję przez `pkg-config --modversion fuse3`; historyczny builder FOD wybieral
+libfuse 3.18.3 przez `/usr/local/lib/pkgconfig`. Testowe buildy upstream
 3.18.2 i 3.18.3 zainstalowano izolowanie pod `/var/tmp`; zamontowane testy
-uruchomiono z tymi bibliotekami i helperami. Minimum runtime/build
+uruchomiono z tymi bibliotekami i helperami. Dla aktualnego checkoutu na
+`lt7300` zalecane jest uzywanie lokalnego katalogu `.fod/toolchains` opisanego ponizej. Minimum runtime/build
 ustawiono na najstarszą wersję objętą poprawką bezpieczeństwa i sprawdzoną
 montowanym testem.
+
+## Lokalna biblioteka dla dewelopera (2026-11-01)
+
+Na `lt7300` systemowy `pkg-config fuse3` wskazuje 3.17.4, ponizej
+wymaganego minimum. Zweryfikowana instalacja libfuse 3.18.3 znajdowala sie w
+`/var/tmp/fod-libfuse-3.18.3-install`. Nie nalezy zastępowac systemowej
+biblioteki ani falszowac wersji w `fuse3.pc`.
+
+Dla checkoutu FOD jest dostepna bezpieczna, lokalna instalacja w
+`./.fod/toolchains/libfuse-3.18.3`, ignorowana przez `.gitignore`.
+Przenosimy **kopie** kompletnej instalacji (biblioteka, naglowki, pkg-config),
+poprawiajac zapisany absolutny prefix w `fuse3.pc`; nie zostawiamy
+odwolania do starej sciezki w `/var/tmp`. Instalator zachowuje kopie
+zrodlowa do czasu osobnej decyzji o jej sprzatnieciu.
+
+```bash
+cd ~/git/fod
+bash scripts/fod-local-libfuse-install.sh
+source scripts/fod-local-libfuse-env.sh
+pkg-config --modversion fuse3
+pkg-config --variable=pcfiledir fuse3
+pkg-config --libs --cflags 'fuse3 >= 3.18.2'
+```
+
+Oczekiwane: wersja 3.18.3 i `pcfiledir`, `-I`, `-L` pod
+`~/git/fod/.fod/toolchains/libfuse-3.18.3` (z rzeczywista sciezka repo).
+`LD_LIBRARY_PATH` wskazuje ten sam katalog bibliotek podczas uruchamiania
+testow. Samo `PKG_CONFIG_PATH` nie wybiera biblioteki dynamicznej w runtime.
+W nowej sesji terminala ponownie wykonac `source ...-env.sh`.
+
+Opis sprzed tej aktualizacji wskazujacy `/usr/local/lib/pkgconfig` dotyczy
+historycznego buildera i nie odpowiada temu konkretnemu checkoutowi `lt7300`.
+Nie jest to zmiana wymagan produkcyjnych ani wersji FUSE uzywanej w obrazach
+Docker.
 
 ## Rozmiar requestu i strojenie
 
