@@ -4252,7 +4252,19 @@ impl FodFuse {
             .collect::<HashSet<_>>();
 
         for file_id in file_ids {
-            if let Some(attrs) = self.attrs_for_open_file_id(file_id)? {
+            // Diagnostyka: odczyt innego otwartego pliku moze przerwac
+            // wyszukiwanie atrybutow docelowego inode.
+            let candidate = match self.attrs_for_open_file_id(file_id) {
+                Ok(candidate) => candidate,
+                Err(errno) => {
+                    warn!(
+                        "FOD open_inode_candidate_error requested_ino={} candidate_file_id={} errno={}",
+                        ino, file_id, errno
+                    );
+                    return Err(errno);
+                }
+            };
+            if let Some(attrs) = candidate {
                 if attrs.file_attr.ino.0 == ino {
                     return Ok(Some(attrs));
                 }
@@ -6384,6 +6396,12 @@ impl Filesystem for FodFuse {
                             }
                             Ok(_) => {}
                             Err(errno) => {
+                                self.log_request_error(
+                                    req_id,
+                                    "getattr",
+                                    errno,
+                                    format!("ino={} path={} phase=open_inode_probe", ino, path),
+                                );
                                 fuse_reply_error!(reply, errno);
                                 return;
                             }
