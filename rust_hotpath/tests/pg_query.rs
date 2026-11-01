@@ -5114,6 +5114,19 @@ fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<()
     )?;
     let after = repo.query_rows_text(&metadata_sql)?;
     assert_eq!(after, before, "identical write changed file metadata");
+
+    // Zmiana chocby jednego bajtu musi uruchomic zwykla persystencje.
+    let changed_payload = vec![0x5b; bs as usize];
+    let changed_blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &changed_payload,
+        used_len: bs,
+    }];
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &changed_blocks, false, None, None, None, true,
+    )?;
+    let changed = repo.query_rows_text(&metadata_sql)?;
+    assert_ne!(changed, after, "changed write incorrectly classified as no-op");
     Ok(())
 }
 
