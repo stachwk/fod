@@ -5044,6 +5044,41 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
 }
 
 #[test]
+fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+
+    // Zapis z KILL_SUIDGID nie moze zmieniac zwyklych bitow 0644.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let mode = repo.query_scalar_text(&format!(
+        "SELECT mode FROM files WHERE id_file = {file_id}"
+    ))?;
+    assert_eq!(u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?, 0o644);
+
+    // Zapis z KILL_SUIDGID musi usunac SUID w tej samej transakcji.
+    repo.update_file_mode(file_id, "4644")?;
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let mode = repo.query_scalar_text(&format!(
+        "SELECT mode FROM files WHERE id_file = {file_id}"
+    ))?;
+    assert_eq!(u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?, 0o644);
+    Ok(())
+}
+
+#[test]
 fn kernel_killpriv_can_remove_capability_without_owner_authorization() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let fixture = NamespaceFixture::new()?;
