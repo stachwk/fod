@@ -383,7 +383,13 @@ impl ReadBlockCache {
 
     #[cfg(test)]
     // Operacja dostepna wewnatrz crate, bez rozszerzania publicznego API.
-    pub(crate) fn insert(&mut self, file_id: u64, block_index: u64, data: Arc<[u8]>, limit_blocks: usize) {
+    pub(crate) fn insert(
+        &mut self,
+        file_id: u64,
+        block_index: u64,
+        data: Arc<[u8]>,
+        limit_blocks: usize,
+    ) {
         self.insert_many(file_id, &[(block_index, data)], limit_blocks);
     }
 

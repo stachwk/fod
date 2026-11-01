@@ -36,6 +36,8 @@ PostgreSQL **primary** jest źródłem prawdy dla treści, tożsamości `file_id
 
 ### J0. Kontrola środowiska i pierwsze regresje
 
+**Stan 3.4.534:** dopasowano format sygnatury testowej `ReadBlockCache::insert` do rustfmt. Walidacja na lt7300 nadal oczekiwana.
+
 **Stan 3.4.533:** poprawiono E0624: test J0 z modulu `fs` uzyskuje teraz dostep wewnatrz crate do `ReadBlockCache::get/insert`, bez zmiany algorytmu i bez publicznego API. Test J0 wymaga ponownej walidacji na lt7300.
 
 **Stan 3.4.531:** dodano deterministyczny unit test wyłączenia/ponownego włączenia cache w rzeczywistej funkcji `apply_reloadable_runtime`, obejmujący obie warstwy cache i spóźnioną publikację. **Nieuruchomiony na lt7300**; pełna regresja między mountami i direct I/O nadal otwarta.
