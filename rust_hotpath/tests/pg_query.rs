@@ -5186,9 +5186,18 @@ fn persist_identical_killpriv_capability_ctime() -> Result<(), String> {
     let after = repo.query_rows_text(&metadata_sql)?;
     assert_eq!(after.len(), 1);
     assert_eq!(after[0][0], before[0][0], "identical write changed mtime");
-    assert_ne!(after[0][1], before[0][1], "capability removal did not update ctime");
-    assert_eq!(after[0][2], before[0][2], "identical write changed generation");
-    assert_eq!(after[0][3], before[0][3], "identical write replaced data object");
+    assert_ne!(
+        after[0][1], before[0][1],
+        "capability removal did not update ctime"
+    );
+    assert_eq!(
+        after[0][2], before[0][2],
+        "identical write changed generation"
+    );
+    assert_eq!(
+        after[0][3], before[0][3],
+        "identical write replaced data object"
+    );
 
     // Kolejny identyczny zapis nie usuwa juz xattr i nie moze ruszac ctime.
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
