@@ -14,6 +14,7 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use support::{block_size_from_config, unique_suffix, MountedFs};
 
@@ -780,9 +781,7 @@ fn concurrent_threads_unlink_and_replace_many_open_file_tasks() -> Result<(), St
                         )
                     })?;
                     replacement.write_all(&replacement_payload).map_err(|err| {
-                        format!(
-                            "worker {worker_id} task {task_id} replacement write failed: {err}"
-                        )
+                        format!("worker {worker_id} task {task_id} replacement write failed: {err}")
                     })?;
                     drop(replacement);
 
@@ -1702,10 +1701,31 @@ fn verify_cross_mount_append_mode(mode: &str, direct_io: &str) -> Result<(), Str
         .map_err(|err| format!("mount A append sync failed: {err}"))?;
     drop(writer_a);
 
-    let mut writer_b = OpenOptions::new()
-        .append(true)
-        .open(&path_b)
-        .map_err(|err| format!("mount B append open failed: {err}"))?;
+    // CLOSE/FLUSH zakonczyly zapis mount A, ale FUSE_RELEASE moze
+    // dotrzec do demona pozniej. Do tego czasu PostgreSQL celowo
+    // odmawia konkurencyjnego ownership przez EBUSY.
+    // Ponawiaj tylko EBUSY, maksymalnie 3 s; nie omijaj fencing.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut busy_retries = 0u32;
+    let mut writer_b = loop {
+        match OpenOptions::new().append(true).open(&path_b) {
+            Ok(file) => break file,
+            Err(err)
+                if err.raw_os_error() == Some(libc::EBUSY) && Instant::now() < deadline =>
+            {
+                busy_retries += 1;
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => {
+                return Err(format!(
+                    "mount B append open failed after {busy_retries} EBUSY retries: {err}"
+                ));
+            }
+        }
+    };
+    if busy_retries > 0 {
+        eprintln!("mount B append open waited for FUSE_RELEASE EBUSY retries={busy_retries}");
+    }
     writer_b
         .write_all(b"-B")
         .map_err(|err| format!("mount B append failed: {err}"))?;
