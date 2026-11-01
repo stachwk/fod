@@ -1703,7 +1703,9 @@ fn verify_cross_mount_append_mode(mode: &str, direct_io: &str) -> Result<(), Str
     // Aktywny writer A musi blokowac konkurencyjne przejecie zapisu.
     // Nie wolno poluzowac PostgreSQL ownership, aby naprawic test.
     match OpenOptions::new().append(true).open(&path_b) {
-        Ok(_) => return Err("mount B acquired write ownership while mount A was open".to_string()),
+        Ok(_) => {
+            return Err("mount B acquired write ownership while mount A was open".to_string());
+        }
         Err(err) if err.raw_os_error() == Some(libc::EBUSY) => {}
         Err(err) => {
             return Err(format!(
@@ -1722,16 +1724,15 @@ fn verify_cross_mount_append_mode(mode: &str, direct_io: &str) -> Result<(), Str
     let mut writer_b = loop {
         match OpenOptions::new().append(true).open(&path_b) {
             Ok(file) => break file,
-            Err(err)
-                if err.raw_os_error() == Some(libc::EBUSY) && Instant::now() < deadline =>
-            {
+            Err(err) => {
+                // Tylko przejsciowy konflikt prawa zapisu moze byc ponawiany.
+                if err.raw_os_error() != Some(libc::EBUSY) || Instant::now() >= deadline {
+                    return Err(format!(
+                        "mount B append open failed after {busy_retries} EBUSY retries: {err}"
+                    ));
+                }
                 busy_retries += 1;
                 thread::sleep(Duration::from_millis(10));
-            }
-            Err(err) => {
-                return Err(format!(
-                    "mount B append open failed after {busy_retries} EBUSY retries: {err}"
-                ));
             }
         }
     };
