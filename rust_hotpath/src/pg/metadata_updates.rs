@@ -595,13 +595,17 @@ impl DbRepo {
         if current_mode & 0o2010 == 0o2010 {
             mode &= !0o2000;
         }
-        let mode =
-            CString::new(format!("{mode:o}")).map_err(|_| "mode contains NUL byte".to_string())?;
-        let update_mode = CString::new(
-            "UPDATE files SET mode=$1, change_date=clock_timestamp() WHERE id_file=$2",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        exec_command_params(conn, &update_mode, &[&mode, &file_id])?;
+        // Nie aktualizuj ctime, jezeli bity przywilejow juz sa wyczyszczone.
+        // Blokada FOR UPDATE pozostaje aktywna do konca transakcji PostgreSQL.
+        if mode != current_mode {
+            let mode = CString::new(format!("{mode:o}"))
+                .map_err(|_| "mode contains NUL byte".to_string())?;
+            let update_mode = CString::new(
+                "UPDATE files SET mode=$1, change_date=clock_timestamp() WHERE id_file=$2",
+            )
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+            exec_command_params(conn, &update_mode, &[&mode, &file_id])?;
+        }
 
         let delete_capability = CString::new(
             "DELETE FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='security.capability'",
