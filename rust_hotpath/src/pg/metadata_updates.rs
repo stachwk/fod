@@ -627,8 +627,17 @@ impl DbRepo {
             exec_command_params(conn, &update_mode, &[&mode, &file_id])?;
         }
 
+        // Usuniecie security.capability jest zmiana metadanych inode.
+        // Aktualizuj ctime tylko jesli DELETE rzeczywiscie usunal xattr.
+        // WITH utrzymuje operacje w jednej transakcji z blokada wiersza pliku.
         let delete_capability = CString::new(
-            "DELETE FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='security.capability'",
+            "WITH removed AS (
+                DELETE FROM xattrs
+                WHERE owner_kind='file' AND owner_id=$1 AND name='security.capability'
+                RETURNING owner_id
+             )
+             UPDATE files SET change_date=clock_timestamp()
+             WHERE id_file=$1 AND EXISTS (SELECT 1 FROM removed)",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         exec_command_params(conn, &delete_capability, &[&file_id])
