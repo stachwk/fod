@@ -5146,9 +5146,16 @@ fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<()
 #[test]
 fn persist_identical_write_does_not_accept_null_block_as_sparse_zero() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
-    let fixture = NamespaceFixture::new()?;
-    let repo = &fixture.repo;
-    let file_id = fixture.file_id.unwrap();
+    // Osobna baza: uszkodzenie NOT NULL nie dotyka schematu testow FOD.
+    let (_temporary_db, repo) = repo_with_temporary_current_schema()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("null_noop_block"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_noop_seed"),
+    )?;
     let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
     let initial_payload = vec![0x5a; bs as usize];
     let initial_blocks = [PersistBlockRow {
@@ -5157,49 +5164,38 @@ fn persist_identical_write_does_not_accept_null_block_as_sparse_zero() -> Result
         used_len: bs,
     }];
 
-    // Zapelnij blok przed kontrolowanym wprowadzeniem blednego NULL.
+    // Zapisz poprawny blok przed wprowadzeniem NULL do kopii testowej.
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
         file_id, bs, bs, 1, false, &initial_blocks, false, None, None, None, true,
     )?;
     repo.exec("ALTER TABLE data_blocks ALTER COLUMN data DROP NOT NULL")?;
-    let result = (|| {
-        repo.exec(&format!(
-            "UPDATE data_blocks SET data=NULL WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0"
-        ))?;
-        let before = repo.query_scalar_text(&format!(
-            "SELECT content_generation::text FROM files WHERE id_file={file_id}"
-        ))?;
+    repo.exec(&format!(
+        "UPDATE data_blocks SET data=NULL WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0"
+    ))?;
+    let before = repo.query_scalar_text(&format!(
+        "SELECT content_generation::text FROM files WHERE id_file={file_id}"
+    ))?;
 
-        // NULL nie jest brakujacym blokiem sparse. Zapis zer musi naprawic
-        // poprzedni blok, a nie przedwczesnie skonczyc sie jako no-op.
-        let zero_payload = vec![0u8; bs as usize];
-        let zero_blocks = [PersistBlockRow {
-            block_index: 0,
-            data: &zero_payload,
-            used_len: bs,
-        }];
-        repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
-            file_id, bs, bs, 1, false, &zero_blocks, false, None, None, None, true,
-        )?;
-        let after = repo.query_scalar_text(&format!(
-            "SELECT content_generation::text FROM files WHERE id_file={file_id}"
-        ))?;
-        assert_ne!(after, before, "NULL block was incorrectly classified as no-op");
-        let null_count = repo.query_scalar_text(&format!(
-            "SELECT count(*)::text FROM data_blocks WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0 AND data IS NULL"
-        ))?;
-        assert_eq!(null_count.trim(), "0", "NULL block survived zero rewrite");
-        Ok(())
-    })();
+    // NULL nie jest brakujacym blokiem sparse: zapis zer ma go zastapic.
+    let zero_payload = vec![0u8; bs as usize];
+    let zero_blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &zero_payload,
+        used_len: bs,
+    }];
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &zero_blocks, false, None, None, None, true,
+    )?;
+    let after = repo.query_scalar_text(&format!(
+        "SELECT content_generation::text FROM files WHERE id_file={file_id}"
+    ))?;
+    assert_ne!(after, before, "NULL block was incorrectly classified as no-op");
 
-    // Odtworz NOT NULL takze wtedy, gdy test regresyjny zawiedzie.
-    let cleanup = (|| {
-        repo.exec(&format!(
-            "DELETE FROM data_blocks WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND data IS NULL"
-        ))?;
-        repo.exec("ALTER TABLE data_blocks ALTER COLUMN data SET NOT NULL")
-    })();
-    result.and(cleanup)
+    let null_count = repo.query_scalar_text(&format!(
+        "SELECT count(*)::text FROM data_blocks WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0 AND data IS NULL"
+    ))?;
+    assert_eq!(null_count.trim(), "0", "NULL block survived zero rewrite");
+    Ok(())
 }
 
 #[test]
