@@ -1699,6 +1699,18 @@ fn verify_cross_mount_append_mode(mode: &str, direct_io: &str) -> Result<(), Str
     writer_a
         .sync_all()
         .map_err(|err| format!("mount A append sync failed: {err}"))?;
+
+    // Aktywny writer A musi blokowac konkurencyjne przejecie zapisu.
+    // Nie wolno poluzowac PostgreSQL ownership, aby naprawic test.
+    match OpenOptions::new().append(true).open(&path_b) {
+        Ok(_) => return Err("mount B acquired write ownership while mount A was open".to_string()),
+        Err(err) if err.raw_os_error() == Some(libc::EBUSY) => {}
+        Err(err) => {
+            return Err(format!(
+                "mount B expected EBUSY while A held ownership, got {err}"
+            ));
+        }
+    }
     drop(writer_a);
 
     // CLOSE/FLUSH zakonczyly zapis mount A, ale FUSE_RELEASE moze
