@@ -58,7 +58,6 @@ impl WriteState {
     fn ensure_block_overlay(&mut self, block_size: u64) {
         self.payload.ensure_block_overlay(block_size);
     }
-
 }
 
 impl FodFuse {
