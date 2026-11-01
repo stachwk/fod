@@ -45,6 +45,8 @@ PostgreSQL **primary** jest źródłem prawdy dla treści, tożsamości `file_id
 
 ### J1. Authoritative generation snapshot
 
+**Stan 3.4.532:** dodano opt-in `fetch_block_range_with_generation_authoritative_shared` na `ConnectionLane::Write`, współdzielący SQL/dekoder z trasą read-replica oraz asercje primary-snapshot w `pg_query`. **Testy PostgreSQL nieuruchomione**. Nie zmieniono zwykłego cached read, FUSE notifier ani bariery `fsync`.
+
 Dodać lub wydzielić wariant `fetch_block_range_with_generation_authoritative_shared` korzystający z istniejącego mechanizmu `ConnectionLane::Write`. Zachować jedno-statementowy snapshot, nie rozdzielać SELECT metadata i SELECT data na dwa niepowiązane obrazy MVCC. Zmienić minimalną liczbę call-site'ów: opt-in strict/generation path najpierw; legacy bez regresji. Testować: missing file, EOF, pusty plik, COW, truncate, paused WAL replay i committed write z B. Dopuszczalne przyszłe optymalizacje replica reads wyłącznie po dowodzie bezpiecznego replay LSN / read-fence.
 
 ### J2. Bezpieczna publikacja i normalny read

@@ -625,13 +625,50 @@ impl DbRepo {
     }
 
     /// Reads size, committed content generation and blocks from one MVCC
-    /// statement snapshot. Requires schema v26; opt-in until all mounts upgrade.
+    /// statement snapshot using ordinary read routing (which may use replicas).
+    /// Do not use this route for strict cross-mount coherence.
     pub fn fetch_block_range_with_generation_shared(
         &self,
         file_id: u64,
         first_block: u64,
         last_block: u64,
         block_size: u64,
+    ) -> Result<GeneratedSharedBlockRows, String> {
+        self.fetch_block_range_with_generation_shared_on(
+            file_id,
+            first_block,
+            last_block,
+            block_size,
+            false,
+        )
+    }
+
+    /// Authoritative generation snapshot from the PostgreSQL primary.
+    /// Content, size and generation remain from one MVCC statement snapshot.
+    /// This is an opt-in primitive, not a complete FUSE cache-coherence barrier.
+    pub fn fetch_block_range_with_generation_authoritative_shared(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+    ) -> Result<GeneratedSharedBlockRows, String> {
+        self.fetch_block_range_with_generation_shared_on(
+            file_id,
+            first_block,
+            last_block,
+            block_size,
+            true,
+        )
+    }
+
+    fn fetch_block_range_with_generation_shared_on(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+        authoritative: bool,
     ) -> Result<GeneratedSharedBlockRows, String> {
         let sql = CString::new(
             "WITH snapshot AS MATERIALIZED (
@@ -649,7 +686,7 @@ impl DbRepo {
         let file = CString::new(file_id.to_string()).map_err(|err| err.to_string())?;
         let first = CString::new(first_block.to_string()).map_err(|err| err.to_string())?;
         let last = CString::new(last_block.to_string()).map_err(|err| err.to_string())?;
-        self.with_read_connection(|conn| unsafe {
+        let query = |conn| unsafe {
             let params = [&file, &first, &last];
             let values = params.iter().map(|p| p.as_ptr()).collect::<Vec<_>>();
             let result = PQexecParams(
@@ -666,7 +703,12 @@ impl DbRepo {
                 return Err(conn_error(conn));
             }
             decode_generation_block_snapshot(result, block_size.max(1) as usize)
-        })
+        };
+        if authoritative {
+            self.with_connection(super::ConnectionLane::Write, query)
+        } else {
+            self.with_read_connection(query)
+        }
     }
 
     pub fn fetch_block_range_with_size_shared(

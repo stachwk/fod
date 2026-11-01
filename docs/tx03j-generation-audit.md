@@ -83,9 +83,12 @@ initialized database with `fod.config.block_size` and
 The schema required by current runtime is 39. Migration 0027 already enforces
 explicit +1 increments, and the reviewed persist/streaming/COW/hole-punch/
 size-change/adoption paths perform them atomically. Do not revert to timestamp-
-driven generation increments or edit historical migrations. The generational
-snapshot API uses `with_read_connection`, which may route to a lagging replica;
-only the separate explicit strict-read snapshot was routed to primary in 3.4.522.
+driven generation increments or edit historical migrations. The legacy generational
+snapshot API still uses `with_read_connection`, which may route to a lagging
+replica. FOD 3.4.532 adds an explicit primary-authoritative generation snapshot
+using the same statement and decoder; ordinary cached reads are **not** wired
+to it yet. The separate explicit strict-read size snapshot was routed to
+primary in 3.4.522.
 The default cached-read and kernel notification paths still lack a complete
 cross-mount protocol. FOD 3.4.529 fixes local disable/re-enable cache cleanup,
 but its runtime race regression remains unexecuted here.

@@ -1166,11 +1166,33 @@ fn generated_block_snapshot_matches_committed_payload() -> Result<(), String> {
         if blocks.len() != 1 || blocks[0].0 != 0 || blocks[0].1.as_ref() != payload.as_slice() {
             return Err("generation snapshot returned incorrect committed block".to_string());
         }
+        // J1: ten sam atomowy snapshot z primary, z pominieciem replik.
+        // Wynik jest porownywany z dotychczasowym odczytem na testowej primary.
+        let (primary_size, primary_generation, primary_blocks) = repo
+            .fetch_block_range_with_generation_authoritative_shared(file_id, 0, 0, bs)?
+            .ok_or_else(|| "missing authoritative generation snapshot".to_string())?;
+        if primary_size != bs
+            || primary_generation != generation
+            || primary_blocks.len() != 1
+            || primary_blocks[0].0 != 0
+            || primary_blocks[0].1.as_ref() != payload.as_slice()
+        {
+            return Err("primary generation snapshot differs from committed payload".to_string());
+        }
         let (eof_size, eof_generation, eof_blocks) = repo
             .fetch_block_range_with_generation_shared(file_id, 10, 11, bs)?
             .ok_or_else(|| "missing metadata after EOF".to_string())?;
         if eof_size != bs || eof_generation != generation || !eof_blocks.is_empty() {
             return Err("generation snapshot EOF metadata mismatch".to_string());
+        }
+        let (primary_eof_size, primary_eof_generation, primary_eof_blocks) = repo
+            .fetch_block_range_with_generation_authoritative_shared(file_id, 10, 11, bs)?
+            .ok_or_else(|| "missing primary generation metadata after EOF".to_string())?;
+        if primary_eof_size != bs
+            || primary_eof_generation != primary_generation
+            || !primary_eof_blocks.is_empty()
+        {
+            return Err("primary generation snapshot EOF metadata mismatch".to_string());
         }
         if repo
             .fetch_block_range_with_generation_shared(i32::MAX as u64, 0, 0, bs)?
