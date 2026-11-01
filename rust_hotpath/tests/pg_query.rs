@@ -5123,10 +5123,23 @@ fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<()
         used_len: bs,
     }];
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
-        file_id, bs, bs, 1, false, &changed_blocks, false, None, None, None, true,
+        file_id,
+        bs,
+        bs,
+        1,
+        false,
+        &changed_blocks,
+        false,
+        None,
+        None,
+        None,
+        true,
     )?;
     let changed = repo.query_rows_text(&metadata_sql)?;
-    assert_ne!(changed, after, "changed write incorrectly classified as no-op");
+    assert_ne!(
+        changed, after,
+        "changed write incorrectly classified as no-op"
+    );
     Ok(())
 }
 
