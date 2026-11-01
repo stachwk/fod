@@ -14720,6 +14720,8 @@ impl DbRepo {
                     && capacity_reservation_token.is_none()
                     && write_authorization.is_none()
                     && !maintain_copy_crc_table
+                    // Ogranicz liczbe zapytan na sciezce porownawczej.
+                    && blocks.len() <= 16
                     && persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks)
                 {
                     let file_id_text = CString::new(file_id.to_string())
@@ -14736,15 +14738,13 @@ impl DbRepo {
                         "identical write file metadata",
                     )?;
                     if let Some(file_row) = file_row {
-                        let stored_size = file_row[0]
-                            .trim()
-                            .parse::<u64>()
-                            .map_err(|_| "invalid file size during identical write".to_string())?;
+                        let stored_size = file_row[0].trim().parse::<u64>().map_err(|_| {
+                            "invalid file size during identical write".to_string()
+                        })?;
                         if stored_size == file_size {
-                            let object_id = file_row[1]
-                                .trim()
-                                .parse::<u64>()
-                                .map_err(|_| "invalid data object id during identical write".to_string())?;
+                            let object_id = file_row[1].trim().parse::<u64>().map_err(|_| {
+                                "invalid data object id during identical write".to_string()
+                            })?;
                             let object_id_text = CString::new(object_id.to_string())
                                 .map_err(|_| "data object id contains NUL byte".to_string())?;
                             let compare_block = CString::new(
@@ -14754,8 +14754,9 @@ impl DbRepo {
                             .map_err(|_| "SQL contains NUL byte".to_string())?;
                             let mut all_identical = true;
                             for block in blocks {
-                                let block_index_text = CString::new(block.block_index.to_string())
-                                    .map_err(|_| "block index contains NUL byte".to_string())?;
+                                let block_index_text =
+                                    CString::new(block.block_index.to_string())
+                                        .map_err(|_| "block index contains NUL byte".to_string())?;
                                 // Transport bez COPY usuwa bloki czesciowe;
                                 // COPY zapisuje ich znormalizowane bajty.
                                 let normalized = if block.used_len < block_size
@@ -14800,11 +14801,8 @@ impl DbRepo {
                                 // Fencing, autoryzacja i KILL_SUIDGID zostaly
                                 // obsluzone; nie zmieniaj generacji ani mtime.
                                 let quota_lock = self.lock_payload_quota_on_conn(conn)?;
-                                return self.enforce_payload_quota_on_conn(
-                                    conn,
-                                    &quota_lock,
-                                    None,
-                                );
+                                return self
+                                    .enforce_payload_quota_on_conn(conn, &quota_lock, None);
                             }
                         }
                     }
