@@ -772,9 +772,19 @@ fn concurrent_threads_unlink_and_replace_many_open_file_tasks() -> Result<(), St
                     fs::remove_file(&path).map_err(|err| {
                         format!("worker {worker_id} task {task_id} unlink failed: {err}")
                     })?;
-                    fs::write(&path, &replacement_payload).map_err(|err| {
-                        format!("worker {worker_id} task {task_id} replacement failed: {err}")
+                    // Rozdziel blad CREATE od bledu WRITE bez zmiany semantyki fs::write.
+                    // Pozwala to wskazac faze, ktora zwrocila EIO podczas testu.
+                    let mut replacement = fs::File::create(&path).map_err(|err| {
+                        format!(
+                            "worker {worker_id} task {task_id} replacement create failed: {err}"
+                        )
                     })?;
+                    replacement.write_all(&replacement_payload).map_err(|err| {
+                        format!(
+                            "worker {worker_id} task {task_id} replacement write failed: {err}"
+                        )
+                    })?;
+                    drop(replacement);
 
                     let mut old_actual = Vec::new();
                     old_file
