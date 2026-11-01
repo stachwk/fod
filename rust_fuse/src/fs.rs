@@ -4135,7 +4135,13 @@ impl FodFuse {
 
     fn attrs_for_open_file_id(&self, file_id: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let authority = self.repo.authoritative_view();
-        let blob = authority.fetch_file_attrs_blob(file_id).map_err(|_| EIO)?;
+        let blob = authority.fetch_file_attrs_blob(file_id).map_err(|err| {
+            warn!(
+                "FOD open_file_attrs_error file_id={} phase=fetch_file_attrs err={}",
+                file_id, err
+            );
+            EIO
+        })?;
         let Some(blob) = blob else {
             return Ok(None);
         };
@@ -4160,7 +4166,13 @@ impl FodFuse {
         let mut rdev = 0;
         if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
-            .map_err(|_| EIO)?
+            .map_err(|err| {
+                warn!(
+                    "FOD open_file_attrs_error file_id={} phase=special_metadata err={}",
+                    file_id, err
+                );
+                EIO
+            })?
         {
             kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
             rdev = Self::encode_fuse_rdev(major, minor)?;
@@ -4168,8 +4180,20 @@ impl FodFuse {
 
         let nlink = authority
             .file_link_count_for_stat(raw_inode)
-            .map_err(|_| EIO)?
-            .ok_or(EIO)?;
+            .map_err(|err| {
+                warn!(
+                    "FOD open_file_attrs_error file_id={} phase=link_count err={}",
+                    file_id, err
+                );
+                EIO
+            })?
+            .ok_or_else(|| {
+                warn!(
+                    "FOD open_file_attrs_error file_id={} phase=link_count_missing",
+                    file_id
+                );
+                EIO
+            })?;
         let inode = self.stable_inode("file", &inode_seed, raw_inode)?;
         Ok(Some(ParsedAttrs {
             inode_seed,
