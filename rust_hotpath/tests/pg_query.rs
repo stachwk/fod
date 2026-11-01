@@ -5144,7 +5144,7 @@ fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<()
 }
 
 #[test]
-fn persist_identical_killpriv_updates_ctime_only_when_capability_is_removed() -> Result<(), String> {
+fn persist_identical_killpriv_capability_ctime() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let fixture = NamespaceFixture::new()?;
     let repo = &fixture.repo;
@@ -5165,7 +5165,7 @@ fn persist_identical_killpriv_updates_ctime_only_when_capability_is_removed() ->
         "file",
         file_id,
         "security.capability",
-        b"test-capability",
+        b"linux-capability-payload",
     )?;
     let metadata_sql = format!(
         "SELECT modification_date::text, change_date::text, \
