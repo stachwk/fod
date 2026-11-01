@@ -14796,9 +14796,15 @@ impl DbRepo {
                                 }
                             }
                             if all_identical {
+                                // Zachowaj kontrole kwoty rowniez dla zapisu no-op.
                                 // Fencing, autoryzacja i KILL_SUIDGID zostaly
-                                // juz obsluzone; nie zmieniaj generacji ani mtime.
-                                return Ok(());
+                                // obsluzone; nie zmieniaj generacji ani mtime.
+                                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
+                                return self.enforce_payload_quota_on_conn(
+                                    conn,
+                                    &quota_lock,
+                                    None,
+                                );
                             }
                         }
                     }
