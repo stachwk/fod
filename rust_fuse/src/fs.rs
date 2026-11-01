@@ -10366,11 +10366,24 @@ impl Filesystem for FodFuse {
             .unwrap_or(existing_size);
         let has_sibling_states = !sibling_states.is_empty();
         let end_offset = offset.saturating_add(data.len() as u64);
+        let kill_suidgid = write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID);
+        // Diagnostyka pokazuje, dlaczego bezpieczny odczyt porownawczy zostal pominiety.
+        // Nie zmienia warunkow dopuszczajacych optymalizacje zapisu.
+        debug!(
+            "FOD req={} op=write noop_probe state_present={} sibling_count={} existing_size={} offset={} end_offset={} kill_suidgid={}",
+            req_id,
+            existing_state.is_some(),
+            sibling_states.len(),
+            existing_size,
+            offset,
+            end_offset,
+            kill_suidgid
+        );
         if existing_state.is_none()
             && !has_sibling_states
             && offset <= existing_size
             && end_offset <= existing_size
-            && !write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID)
+            && !kill_suidgid
         {
             let first_block = offset / self.block_size;
             let last_block = (end_offset.saturating_sub(1)) / self.block_size;
@@ -10387,6 +10400,21 @@ impl Filesystem for FodFuse {
                 self.block_size,
             );
             self.record_write_unchanged_probe_elapsed(probe_started.elapsed());
+            // Raportuj wynik odczytu, nawet gdy dane nie sa identyczne.
+            match &existing {
+                Ok(bytes) => debug!(
+                    "FOD req={} op=write noop_probe_result equal={} actual_len={} expected_len={}",
+                    req_id,
+                    bytes == data,
+                    bytes.len(),
+                    data.len()
+                ),
+                Err(errno) => debug!(
+                    "FOD req={} op=write noop_probe_result read_errno={}",
+                    req_id,
+                    errno
+                ),
+            }
             if let Ok(existing) = existing {
                 if existing == data {
                     debug!(
