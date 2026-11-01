@@ -4172,8 +4172,7 @@ impl FodFuse {
                     file_id, err
                 );
                 EIO
-            })?
-        {
+            })? {
             kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
             rdev = Self::encode_fuse_rdev(major, minor)?;
         }
