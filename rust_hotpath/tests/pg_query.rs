@@ -5144,6 +5144,61 @@ fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<()
 }
 
 #[test]
+fn persist_identical_killpriv_updates_ctime_only_when_capability_is_removed() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+
+    // Zapisz dane przed wstawieniem capability, aby nastepny zapis byl identyczny.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    repo.store_xattr_value_for_owner(
+        "file",
+        file_id,
+        "security.capability",
+        b"test-capability",
+    )?;
+    let metadata_sql = format!(
+        "SELECT modification_date::text, change_date::text, \
+         content_generation::text, data_object_id::text \
+         FROM files WHERE id_file = {file_id}"
+    );
+    let before = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(before.len(), 1);
+
+    // KILL_SUIDGID musi usunac capability, nawet gdy bajty pliku sa identyczne.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("file", file_id, "security.capability")?,
+        None
+    );
+    let after = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0][0], before[0][0], "identical write changed mtime");
+    assert_ne!(after[0][1], before[0][1], "capability removal did not update ctime");
+    assert_eq!(after[0][2], before[0][2], "identical write changed generation");
+    assert_eq!(after[0][3], before[0][3], "identical write replaced data object");
+
+    // Kolejny identyczny zapis nie usuwa juz xattr i nie moze ruszac ctime.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    assert_eq!(repo.query_rows_text(&metadata_sql)?, after);
+    Ok(())
+}
+
+#[test]
 fn kernel_killpriv_can_remove_capability_without_owner_authorization() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let fixture = NamespaceFixture::new()?;
