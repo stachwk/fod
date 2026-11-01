@@ -835,10 +835,22 @@ fn concurrent_threads_unlink_and_replace_many_open_file_tasks() -> Result<(), St
         })
         .collect::<Vec<_>>();
 
+    // Dolacz wszystkie watki takze po bledzie jednego z nich.
+    // Zapobiega to odmontowaniu FUSE, gdy inne operacje nadal trwaja.
+    let mut first_error = None;
     for worker in workers {
-        worker
+        let result = worker
             .join()
-            .map_err(|_| "open/unlink replacement worker panicked".to_string())??;
+            .map_err(|_| "open/unlink replacement worker panicked".to_string())
+            .and_then(|result| result);
+        if first_error.is_none() {
+            if let Err(err) = result {
+                first_error = Some(err);
+            }
+        }
+    }
+    if let Some(err) = first_error {
+        return Err(err);
     }
 
     fs::remove_dir_all(&root).map_err(|err| format!("remove task directory failed: {err}"))?;
