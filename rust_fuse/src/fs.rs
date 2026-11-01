@@ -11775,6 +11775,109 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime};
 
+    // J0: uruchamiamy produkcyjna funkcje zmiany konfiguracji, bez PostgreSQL.
+    // Wypelnienie odczytu rozpoczete przed wylaczeniem nie moze opublikowac
+    // nieaktualnego bloku po ponownym wlaczeniu cache.
+    #[test]
+    fn runtime_cache_disable_reenable_rejects_stale_fill() {
+        use super::{apply_reloadable_runtime, RuntimeReloadableSettings};
+        use crate::read_cache::{FileCacheGenerationGate, ReadBlockCache};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::RwLock;
+
+        let enabled = RuntimeReloadableSettings {
+            profile: None,
+            log_level: "info".to_string(),
+            metadata_cache_ttl: Duration::ZERO,
+            statfs_cache_ttl: Duration::ZERO,
+            read_cache_blocks: 8,
+            read_ahead_blocks: 8,
+            sequential_read_ahead_blocks: 8,
+            direct_io_read_prefetch_blocks: 16,
+            small_file_read_threshold_blocks: 8,
+            workers_read: 1,
+            workers_read_min_blocks: 1,
+            workers_write: 1,
+            workers_write_min_blocks: 1,
+            persist_buffer_chunk_blocks: 1,
+            copy_dedupe_enabled: false,
+            copy_dedupe_min_blocks: 1,
+            copy_dedupe_max_blocks: 1,
+            copy_dedupe_crc_table: false,
+        };
+        let live_runtime = Arc::new(RwLock::new(enabled.clone()));
+        let block_cache = Mutex::new(ReadBlockCache::new("fifo"));
+        let generations = FileCacheGenerationGate::default();
+        let recent_blocks = Mutex::new(HashMap::new());
+        let recent_len = AtomicU64::new(1);
+
+        // Cache blokow i recent-write sa niezaleznymi zrodlami starego odczytu.
+        block_cache
+            .lock()
+            .unwrap()
+            .insert(7, 0, Arc::from(vec![7u8]), 8);
+        block_cache
+            .lock()
+            .unwrap()
+            .insert(8, 0, Arc::from(vec![8u8]), 8);
+        recent_blocks
+            .lock()
+            .unwrap()
+            .insert((7, 0), Arc::from(vec![9u8]));
+        let in_flight_stamp = generations.snapshot(7);
+
+        // Symulacja: A czyta stara generacje, cache jest wylaczany,
+        // B zatwierdza nowe dane, a nastepnie cache jest wlaczany ponownie.
+        let mut disabled = enabled.clone();
+        disabled.read_cache_blocks = 0;
+        assert!(apply_reloadable_runtime(
+            &live_runtime,
+            disabled,
+            &block_cache,
+            &generations,
+            &recent_blocks,
+            &recent_len,
+        ));
+        assert_eq!(live_runtime.read().unwrap().read_cache_blocks, 0);
+        assert_eq!(recent_len.load(Ordering::Relaxed), 0);
+        assert!(recent_blocks.lock().unwrap().is_empty());
+        {
+            let mut cache = block_cache.lock().unwrap();
+            assert!(cache.get(7, 0).is_none());
+            assert!(cache.get(8, 0).is_none());
+        }
+
+        assert!(apply_reloadable_runtime(
+            &live_runtime,
+            enabled,
+            &block_cache,
+            &generations,
+            &recent_blocks,
+            &recent_len,
+        ));
+        assert!(!generations.publish_if_current(7, in_flight_stamp, || {
+            block_cache
+                .lock()
+                .unwrap()
+                .insert(7, 0, Arc::from(vec![7u8]), 8);
+        }));
+        assert!(block_cache.lock().unwrap().get(7, 0).is_none());
+        assert!(recent_blocks.lock().unwrap().is_empty());
+
+        // Dopiero nowa epoka moze zapamietac nowy odczyt.
+        let fresh_stamp = generations.snapshot(7);
+        assert!(generations.publish_if_current(7, fresh_stamp, || {
+            block_cache
+                .lock()
+                .unwrap()
+                .insert(7, 0, Arc::from(vec![42u8]), 8);
+        }));
+        assert_eq!(
+            block_cache.lock().unwrap().get(7, 0).as_deref(),
+            Some(&[42u8][..])
+        );
+    }
+
     #[test]
     fn persisted_file_mode_rejects_type_bits_and_malformed_values() {
         assert_eq!(parse_file_mode("640"), Ok(0o640));

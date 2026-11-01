@@ -36,6 +36,8 @@ PostgreSQL **primary** jest źródłem prawdy dla treści, tożsamości `file_id
 
 ### J0. Kontrola środowiska i pierwsze regresje
 
+**Stan 3.4.531:** dodano deterministyczny unit test wyłączenia/ponownego włączenia cache w rzeczywistej funkcji `apply_reloadable_runtime`, obejmujący obie warstwy cache i spóźnioną publikację. **Nieuruchomiony na lt7300**; pełna regresja między mountami i direct I/O nadal otwarta.
+
 1. Potwierdzić aktualny HEAD i schemat. Badany HEAD to 3.4.529, runtime wymaga **schema 39**, nie historycznej 26. Sprawdzić port primary (`55441` w ostatnim środowisku `lt7300`), poświadczenia z bezpiecznego źródła i `fod.config` (`block_size`, `max_fs_size_bytes`).
 2. Test `content_generation.rs` ma izolowany schema i wymaga osobnej bazy z `test` w nazwie; pełny `pg_query` wymaga **zainicjalizowanej**, aktualnej bazy FOD. Nie wykorzystywać działającego deploymentu jako fixture destructive.
 3. Odtworzyć sekwencję: zapełnij cache A → `FOD_READ_CACHE_BLOCKS=0` → commit innego mountu B → przywróć limit → pierwszy read A. Powtórzyć dla recent-write cache, direct I/O i in-flight fills. Sprawdzić, że plik C pozostaje nienaruszony.
