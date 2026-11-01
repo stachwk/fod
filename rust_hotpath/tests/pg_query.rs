@@ -5061,9 +5061,8 @@ fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String>
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
         file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
     )?;
-    let mode = repo.query_scalar_text(&format!(
-        "SELECT mode FROM files WHERE id_file = {file_id}"
-    ))?;
+    let mode =
+        repo.query_scalar_text(&format!("SELECT mode FROM files WHERE id_file = {file_id}"))?;
     assert_eq!(
         u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?,
         0o644
@@ -5074,9 +5073,8 @@ fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String>
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
         file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
     )?;
-    let mode = repo.query_scalar_text(&format!(
-        "SELECT mode FROM files WHERE id_file = {file_id}"
-    ))?;
+    let mode =
+        repo.query_scalar_text(&format!("SELECT mode FROM files WHERE id_file = {file_id}"))?;
     assert_eq!(
         u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?,
         0o644
