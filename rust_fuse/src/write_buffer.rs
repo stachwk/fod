@@ -59,9 +59,6 @@ impl WriteState {
         self.payload.ensure_block_overlay(block_size);
     }
 
-    pub(crate) fn clear_payload(&mut self) {
-        self.payload.clear();
-    }
 }
 
 impl FodFuse {
