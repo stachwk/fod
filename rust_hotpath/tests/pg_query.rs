@@ -5083,6 +5083,41 @@ fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String>
 }
 
 #[test]
+fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+
+    // Zainicjalizuj dane, aby drugi zapis byl naprawde identyczny.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let metadata_sql = format!(
+        "SELECT data_object_id::text, content_generation::text, \
+         modification_date::text, change_date::text \
+         FROM files WHERE id_file = {file_id}"
+    );
+    let before = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(before.len(), 1);
+
+    // Test regresyjny: ponowny zapis identycznej zawartosci nie zmienia metadanych.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let after = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(after, before, "identical write changed file metadata");
+    Ok(())
+}
+
+#[test]
 fn kernel_killpriv_can_remove_capability_without_owner_authorization() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let fixture = NamespaceFixture::new()?;
