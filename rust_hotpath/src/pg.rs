@@ -14713,14 +14713,14 @@ impl DbRepo {
                 }
 
                 // Sprawdz identycznosc danych w centralnej transakcji PostgreSQL.
-                // Ogranicz probe do pelnego pokrycia istniejacego pliku.
+                // Ogranicz probe do pelnego pokrycia istniejacego pliku
+                // i najwyzej 16 blokow, aby nie spowalniac duzych zapisow.
                 // Rezerwacje, truncate, autoryzacje truncate i utrzymanie CRC
                 // korzystaja z dotychczasowej sciezki persystencji.
                 if !truncate_pending
                     && capacity_reservation_token.is_none()
                     && write_authorization.is_none()
                     && !maintain_copy_crc_table
-                    // Ogranicz liczbe zapytan na sciezce porownawczej.
                     && blocks.len() <= 16
                     && persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks)
                 {
