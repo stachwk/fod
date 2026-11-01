@@ -36,6 +36,8 @@ PostgreSQL **primary** jest źródłem prawdy dla treści, tożsamości `file_id
 
 ### J0. Kontrola środowiska i pierwsze regresje
 
+**Stan 3.4.533:** poprawiono E0624: test J0 z modulu `fs` uzyskuje teraz dostep wewnatrz crate do `ReadBlockCache::get/insert`, bez zmiany algorytmu i bez publicznego API. Test J0 wymaga ponownej walidacji na lt7300.
+
 **Stan 3.4.531:** dodano deterministyczny unit test wyłączenia/ponownego włączenia cache w rzeczywistej funkcji `apply_reloadable_runtime`, obejmujący obie warstwy cache i spóźnioną publikację. **Nieuruchomiony na lt7300**; pełna regresja między mountami i direct I/O nadal otwarta.
 
 1. Potwierdzić aktualny HEAD i schemat. Badany HEAD to 3.4.529, runtime wymaga **schema 39**, nie historycznej 26. Sprawdzić port primary (`55441` w ostatnim środowisku `lt7300`), poświadczenia z bezpiecznego źródła i `fod.config` (`block_size`, `max_fs_size_bytes`).

@@ -350,7 +350,8 @@ impl ReadBlockCache {
         }
     }
 
-    fn get(&mut self, file_id: u64, block_index: u64) -> Option<Arc<[u8]>> {
+    // Widocznosc ograniczona do crate: test runtime operuje na prawdziwym cache.
+    pub(crate) fn get(&mut self, file_id: u64, block_index: u64) -> Option<Arc<[u8]>> {
         let key = (file_id, block_index);
         match &mut self.store {
             ReadCacheStore::Fifo { entries, .. } => entries.get(&key).cloned(),
@@ -381,7 +382,8 @@ impl ReadBlockCache {
     }
 
     #[cfg(test)]
-    fn insert(&mut self, file_id: u64, block_index: u64, data: Arc<[u8]>, limit_blocks: usize) {
+    // Operacja dostepna wewnatrz crate, bez rozszerzania publicznego API.
+    pub(crate) fn insert(&mut self, file_id: u64, block_index: u64, data: Arc<[u8]>, limit_blocks: usize) {
         self.insert_many(file_id, &[(block_index, data)], limit_blocks);
     }
 
