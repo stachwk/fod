@@ -10411,8 +10411,7 @@ impl Filesystem for FodFuse {
                 ),
                 Err(errno) => debug!(
                     "FOD req={} op=write noop_probe_result read_errno={}",
-                    req_id,
-                    errno
+                    req_id, errno
                 ),
             }
             if let Ok(existing) = existing {
