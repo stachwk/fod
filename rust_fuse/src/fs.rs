@@ -6416,7 +6416,13 @@ impl Filesystem for FodFuse {
                     // row for an open, unlinked inode. `fstat()` must remain
                     // bound to that live file_id and must not reauthorize its
                     // former pathname after the parent has been removed.
-                    if attrs.file_attr.kind == FileType::RegularFile {
+                    // Dla pliku nadal dowiazanego sciezka wskazuje juz
+                    // wlasciwy inode. Nie skanuj innych otwartych uchwytow:
+                    // ich wiersze moga wlasnie znikac podczas deferred unlink.
+                    // Fallback po file_id jest potrzebny tylko przy nlink=0.
+                    if attrs.file_attr.kind == FileType::RegularFile
+                        && attrs.file_attr.nlink == 0
+                    {
                         match self.attrs_for_open_inode(ino) {
                             Ok(Some(open_attrs)) if open_attrs.file_attr.nlink == 0 => {
                                 reply.attr(&self.attr_cache_ttl_live(), &open_attrs.file_attr);
