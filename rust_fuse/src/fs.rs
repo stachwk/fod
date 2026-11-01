@@ -879,6 +879,10 @@ impl RuntimeReloadHandle {
         repo: DbRepo,
         base_runtime: RuntimeConfig,
         live_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
+        read_block_cache: Arc<Mutex<ReadBlockCache>>,
+        file_cache_generations: Arc<FileCacheGenerationGate>,
+        recent_write_blocks: Arc<Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>>,
+        recent_write_blocks_len: Arc<AtomicU64>,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
@@ -894,7 +898,14 @@ impl RuntimeReloadHandle {
                         Ok(snapshot) => match base_runtime.with_reloadable_overrides(&snapshot) {
                             Ok(updated_runtime) => {
                                 let updated_settings = updated_runtime.reloadable_settings();
-                                apply_reloadable_runtime(&live_runtime, updated_settings);
+                                apply_reloadable_runtime(
+                                    &live_runtime,
+                                    updated_settings,
+                                    &read_block_cache,
+                                    &file_cache_generations,
+                                    &recent_write_blocks,
+                                    &recent_write_blocks_len,
+                                );
                             }
                             Err(err) => warn!("FOD runtime reload rejected snapshot: {}", err),
                         },
@@ -1126,12 +1137,24 @@ fn runtime_override_snapshot(repo: &DbRepo) -> Result<HashMap<String, String>, S
 fn apply_reloadable_runtime(
     live_runtime: &Arc<RwLock<RuntimeReloadableSettings>>,
     settings: RuntimeReloadableSettings,
+    read_block_cache: &Mutex<ReadBlockCache>,
+    file_cache_generations: &FileCacheGenerationGate,
+    recent_write_blocks: &Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>,
+    recent_write_blocks_len: &AtomicU64,
 ) -> bool {
+    // `store_recent_write_blocks` takes the recent-write cache lock before
+    // reading settings. Keep the same order here to avoid lock inversion.
+    let mut recent_write_guard = recent_write_blocks
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    let mut disabling_read_cache = false;
     let changed = match live_runtime.write() {
         Ok(mut guard) => {
             if *guard == settings {
                 false
             } else {
+                disabling_read_cache =
+                    guard.read_cache_blocks > 0 && settings.read_cache_blocks == 0;
                 *guard = settings.clone();
                 true
             }
@@ -1141,11 +1164,26 @@ fn apply_reloadable_runtime(
             if *guard == settings {
                 false
             } else {
+                disabling_read_cache =
+                    guard.read_cache_blocks > 0 && settings.read_cache_blocks == 0;
                 *guard = settings.clone();
                 true
             }
         }
     };
+    if disabling_read_cache {
+        // Do not hold the settings lock while acquiring the generation gate:
+        // cache fills may hold that gate while reading the current settings.
+        // New reads already see zero and bypass both caches at this point.
+        file_cache_generations.invalidate_all_and(|| {
+            read_block_cache
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clear_all();
+            recent_write_guard.clear();
+            recent_write_blocks_len.store(0, Ordering::Relaxed);
+        });
+    }
     if changed {
         log::set_max_level(
             settings
@@ -1748,11 +1786,11 @@ pub struct FodFuse {
     directory_fh_table: Mutex<HashMap<u64, Arc<Mutex<DirectoryHandleState>>>>,
     write_ownership_gate: Mutex<()>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
-    pub(crate) read_block_cache: Mutex<ReadBlockCache>,
+    pub(crate) read_block_cache: Arc<Mutex<ReadBlockCache>>,
     pub(crate) read_fill_coordinator: ReadFillCoordinator,
-    pub(crate) file_cache_generations: FileCacheGenerationGate,
-    pub(crate) recent_write_blocks: Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>,
-    pub(crate) recent_write_blocks_len: AtomicU64,
+    pub(crate) file_cache_generations: Arc<FileCacheGenerationGate>,
+    pub(crate) recent_write_blocks: Arc<Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>>,
+    pub(crate) recent_write_blocks_len: Arc<AtomicU64>,
     pub(crate) read_sequence_state: Mutex<HashMap<u64, ReadSequenceState>>,
     posix_locks: Arc<Mutex<HashMap<String, Vec<PosixLockRecord>>>>,
     pending_lock_waits: Mutex<HashMap<RequestId, Arc<PendingLockWait>>>,
@@ -1912,13 +1950,13 @@ impl FodFuse {
             directory_fh_table: Mutex::new(HashMap::new()),
             write_ownership_gate: Mutex::new(()),
             write_states: Mutex::new(HashMap::new()),
-            read_block_cache: Mutex::new(ReadBlockCache::new(
+            read_block_cache: Arc::new(Mutex::new(ReadBlockCache::new(
                 cache.read_cache_eviction_policy.as_str(),
-            )),
+            ))),
             read_fill_coordinator: ReadFillCoordinator::default(),
-            file_cache_generations: FileCacheGenerationGate::default(),
-            recent_write_blocks: Mutex::new(HashMap::new()),
-            recent_write_blocks_len: AtomicU64::new(0),
+            file_cache_generations: Arc::new(FileCacheGenerationGate::default()),
+            recent_write_blocks: Arc::new(Mutex::new(HashMap::new())),
+            recent_write_blocks_len: Arc::new(AtomicU64::new(0)),
             read_sequence_state: Mutex::new(HashMap::new()),
             posix_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_lock_waits: Mutex::new(HashMap::new()),
@@ -6071,6 +6109,10 @@ impl FodFuse {
             self.repo.clone(),
             base_runtime.clone(),
             Arc::clone(&self.reloadable_runtime),
+            Arc::clone(&self.read_block_cache),
+            Arc::clone(&self.file_cache_generations),
+            Arc::clone(&self.recent_write_blocks),
+            Arc::clone(&self.recent_write_blocks_len),
         )?;
         self.runtime_reload = Some(handle);
         Ok(())

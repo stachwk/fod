@@ -35,10 +35,11 @@ Stan implementacji:
   direct I/O i omija wcześniej zapełnione wpisy także po przeładowaniu
   konfiguracji; poprzednia implementacja zachowywała pojemność co najmniej
   jednego bloku, a pojedynczy odczyt mógł nadal trafić do już zapełnionego
-  cache. Wpisy nie są jednak usuwane przy wyłączeniu; po ponownym włączeniu
-  cache mogą wrócić do odczytu. Trzeba ustalić i zweryfikować zachowanie tej
-  zmiany runtime, zanim zostanie uznana za bezpieczną. Macierz TX03J.1 trzeba
-  powtórzyć dla poprawnie wyłączonego cache.
+  cache. FOD 3.4.529 czyści cache bloków i ostatnich zapisów przy przejściu
+  runtime z limitu dodatniego na zero. Wspólna epoka odrzuca również fill
+  rozpoczęty przed przełączeniem, jeśli próbuje opublikować wynik po ponownym
+  włączeniu cache. Regresja tego przejścia i macierz TX03J.1 nadal wymagają
+  uruchomienia.
 - Zdalny trwały dziennik zdarzeń, zwykły runtime listener FUSE i selektywne
   unieważnianie cache jądra nie są zaimplementowane. `fsync()` nie czeka dziś
   na potwierdzenia innych mountów.

@@ -8,7 +8,7 @@ use log::warn;
 use rust_hotpath::pg::DbRepo;
 use rust_hotpath::read_missing_range_worker_count;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -23,20 +23,24 @@ type MissingBlockIndices = Vec<u64>;
 pub(crate) struct FileCacheStamp {
     generation: u64,
     epoch: u64,
+    cache_epoch: u64,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct FileCacheGenerationGate {
-    files: Mutex<HashMap<u64, FileCacheStamp>>,
+    cache_epoch: AtomicU64,
+    files: Mutex<HashMap<u64, (u64, u64)>>,
 }
 
 impl FileCacheGenerationGate {
     pub(crate) fn snapshot(&self, file_id: u64) -> FileCacheStamp {
         let files = self.files.lock().unwrap_or_else(|err| err.into_inner());
-        files.get(&file_id).copied().unwrap_or(FileCacheStamp {
-            generation: 0,
-            epoch: 0,
-        })
+        let (generation, epoch) = files.get(&file_id).copied().unwrap_or_default();
+        FileCacheStamp {
+            generation,
+            epoch,
+            cache_epoch: self.cache_epoch.load(Ordering::Relaxed),
+        }
     }
 
     // Serialize local content invalidation with cache-fill publication. A fill
@@ -44,11 +48,16 @@ impl FileCacheGenerationGate {
     // the caller has cleared this file's cached blocks.
     pub(crate) fn invalidate_and(&self, file_id: u64, invalidate: impl FnOnce()) {
         let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
-        let current = files.entry(file_id).or_insert(FileCacheStamp {
-            generation: 0,
-            epoch: 0,
-        });
-        current.epoch = current.epoch.saturating_add(1);
+        let current = files.entry(file_id).or_default();
+        current.1 = current.1.saturating_add(1);
+        invalidate();
+    }
+
+    // Runtime cache disable is mount-wide. Advance one shared epoch while
+    // serializing with fills, then clear resident entries under this gate.
+    pub(crate) fn invalidate_all_and(&self, invalidate: impl FnOnce()) {
+        let _files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        self.cache_epoch.fetch_add(1, Ordering::Relaxed);
         invalidate();
     }
 
@@ -59,15 +68,12 @@ impl FileCacheGenerationGate {
     // Duplicated/out-of-order events do not invalidate newer data.
     pub(crate) fn advance(&self, file_id: u64, generation: u64) -> bool {
         let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
-        let current = files.entry(file_id).or_insert(FileCacheStamp {
-            generation: 0,
-            epoch: 0,
-        });
-        if generation <= current.generation {
+        let current = files.entry(file_id).or_default();
+        if generation <= current.0 {
             return false;
         }
-        current.generation = generation;
-        current.epoch = current.epoch.saturating_add(1);
+        current.0 = generation;
+        current.1 = current.1.saturating_add(1);
         true
     }
 
@@ -80,10 +86,12 @@ impl FileCacheGenerationGate {
         publish: impl FnOnce(),
     ) -> bool {
         let files = self.files.lock().unwrap_or_else(|err| err.into_inner());
-        let current = files.get(&file_id).copied().unwrap_or(FileCacheStamp {
-            generation: 0,
-            epoch: 0,
-        });
+        let (generation, epoch) = files.get(&file_id).copied().unwrap_or_default();
+        let current = FileCacheStamp {
+            generation,
+            epoch,
+            cache_epoch: self.cache_epoch.load(Ordering::Relaxed),
+        };
         if current != stamp {
             return false;
         }
@@ -99,15 +107,12 @@ impl FileCacheGenerationGate {
         invalidate: impl FnOnce(),
     ) -> bool {
         let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
-        let current = files.entry(file_id).or_insert(FileCacheStamp {
-            generation: 0,
-            epoch: 0,
-        });
-        if generation <= current.generation {
+        let current = files.entry(file_id).or_default();
+        if generation <= current.0 {
             return false;
         }
-        current.generation = generation;
-        current.epoch = current.epoch.saturating_add(1);
+        current.0 = generation;
+        current.1 = current.1.saturating_add(1);
         invalidate();
         true
     }
@@ -433,6 +438,16 @@ impl ReadBlockCache {
             }
         }
     }
+
+    pub(crate) fn clear_all(&mut self) {
+        match &mut self.store {
+            ReadCacheStore::Fifo { entries, order } => {
+                entries.clear();
+                order.clear();
+            }
+            ReadCacheStore::Lru { entries } => entries.clear(),
+        }
+    }
 }
 
 impl FodFuse {
@@ -645,6 +660,9 @@ impl FodFuse {
             self.record_store_recent_write_blocks_elapsed(started.elapsed());
             return;
         };
+        // Runtime reload takes this lock before the settings lock, matching
+        // this path's cache -> settings order and preventing stale reinsertion.
+        let keep_limit = self.recent_write_blocks_limit(total_blocks);
 
         if truncate_pending || total_blocks == 0 {
             guard.retain(|(cached_file_id, cached_block_index), _| {
@@ -658,7 +676,6 @@ impl FodFuse {
             }
         }
         // Evict in deterministic key order so cache behavior is reproducible.
-        let keep_limit = self.recent_write_blocks_limit(total_blocks);
         let over_limit = guard.len().saturating_sub(keep_limit);
         if over_limit > 0 {
             let mut keys = guard.keys().copied().collect::<Vec<_>>();
@@ -958,31 +975,47 @@ impl FodFuse {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(target);
         }
-        if let Some(block) = self.cached_read_block(file_id, target_block) {
-            self.record_read_block_map_elapsed(started.elapsed());
-            return Ok(Some(block));
-        }
-        let (cached, missing) =
-            self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
-        let mut target = cached
-            .into_iter()
-            .find(|(block_index, _)| *block_index == target_block)
-            .map(|(_, block)| block);
-        if missing.is_empty() {
+        loop {
+            let stamp = self.file_cache_generations.snapshot(file_id);
+            if let Some(block) = self.cached_read_block(file_id, target_block) {
+                if self.file_cache_generations.is_current(file_id, stamp) {
+                    self.record_read_block_map_elapsed(started.elapsed());
+                    return Ok(Some(block));
+                }
+                continue;
+            }
+            let (cached, missing) =
+                self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if !self.file_cache_generations.is_current(file_id, stamp) {
+                continue;
+            }
+            let mut target = cached
+                .into_iter()
+                .find(|(block_index, _)| *block_index == target_block)
+                .map(|(_, block)| block);
+            if missing.is_empty() {
+                self.record_read_block_map_elapsed(started.elapsed());
+                return Ok(target);
+            }
+
+            let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
+            if !self
+                .file_cache_generations
+                .publish_if_current(file_id, stamp, || {
+                    self.store_read_blocks(file_id, &fetched);
+                })
+            {
+                continue;
+            }
+            if target.is_none() {
+                target = fetched
+                    .iter()
+                    .find(|(block_index, _)| *block_index == target_block)
+                    .map(|(_, block)| Arc::clone(block));
+            }
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(target);
         }
-
-        let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
-        if target.is_none() {
-            target = fetched
-                .iter()
-                .find(|(block_index, _)| *block_index == target_block)
-                .map(|(_, block)| Arc::clone(block));
-        }
-        self.store_read_blocks(file_id, &fetched);
-        self.record_read_block_map_elapsed(started.elapsed());
-        Ok(target)
     }
 
     pub(crate) fn read_block_map(
@@ -1002,17 +1035,30 @@ impl FodFuse {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(blocks);
         }
-        let (mut cached, missing) =
-            self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
-        if missing.is_empty() {
+        loop {
+            let stamp = self.file_cache_generations.snapshot(file_id);
+            let (cached, missing) =
+                self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if !self.file_cache_generations.is_current(file_id, stamp) {
+                continue;
+            }
+            if missing.is_empty() {
+                self.record_read_block_map_elapsed(started.elapsed());
+                return Ok(cached);
+            }
+            let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
+            if !self
+                .file_cache_generations
+                .publish_if_current(file_id, stamp, || {
+                    self.store_read_blocks(file_id, &fetched);
+                })
+            {
+                continue;
+            }
+            let blocks = Self::merge_sorted_blocks(cached, fetched);
             self.record_read_block_map_elapsed(started.elapsed());
-            return Ok(cached);
+            return Ok(blocks);
         }
-        let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
-        self.store_read_blocks(file_id, &fetched);
-        cached = Self::merge_sorted_blocks(cached, fetched);
-        self.record_read_block_map_elapsed(started.elapsed());
-        Ok(cached)
     }
 }
 

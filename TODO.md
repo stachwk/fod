@@ -36,11 +36,11 @@ Reading guide:
   ponownie opublikować dane w cache. Dodatkowo `FOD_READ_CACHE_BLOCKS=0`
   wcześniej nadal zostawiało blok w cache, a pojedynczy odczyt po zmianie
   konfiguracji mógł trafić do wcześniej zapełnionego wpisu. Limit zero omija
-  teraz oba źródła cache, ale nie usuwa wpisów. Po ponownym zwiększeniu limitu
-  stare wpisy mogą znów być użyte. Przed uznaniem przełączania runtime za
-  bezpieczne trzeba wyczyścić cache przy wyłączeniu albo walidować generację
-  przed ponownym użyciem; dodać regresję wyłącz/zmień dane/włącz/odczytaj.
-  Macierz TX03J trzeba powtórzyć. Kontrakt, status i bramy opisuje
+  teraz oba źródła cache. FOD 3.4.529 czyści oba cache przy przejściu runtime
+  z limitu dodatniego na zero i zwiększa wspólną epokę publikacji, aby fill
+  rozpoczęty przed przełączeniem nie opublikował bloku po ponownym włączeniu.
+  Pozostaje regresja: wyłącz/zmień dane/włącz/odczytaj oraz powtórzenie macierzy
+  TX03J. Kontrakt, status i bramy opisuje
   [`docs/TX03J_CROSS_MOUNT_CACHE_COHERENCE.md`](docs/TX03J_CROSS_MOUNT_CACHE_COHERENCE.md).
 
 - [ ] **Uruchomić regresję nie-UTF-8 nazw źródłowych indeksatora.**
