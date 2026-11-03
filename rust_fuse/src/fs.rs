@@ -4167,12 +4167,12 @@ impl FodFuse {
         if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
             .map_err(|err| {
-                warn!(
-                    "FOD open_file_attrs_error file_id={} phase=special_metadata err={}",
-                    file_id, err
-                );
-                EIO
-            })? {
+            warn!(
+                "FOD open_file_attrs_error file_id={} phase=special_metadata err={}",
+                file_id, err
+            );
+            EIO
+        })? {
             kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
             rdev = Self::encode_fuse_rdev(major, minor)?;
         }
