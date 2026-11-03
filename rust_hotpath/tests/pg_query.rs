@@ -5044,6 +5044,255 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
 }
 
 #[test]
+fn persist_killpriv_preserves_plain_mode_and_clears_suid() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+
+    // Zapis z KILL_SUIDGID nie moze zmieniac zwyklych bitow 0644.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let mode =
+        repo.query_scalar_text(&format!("SELECT mode FROM files WHERE id_file = {file_id}"))?;
+    assert_eq!(
+        u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?,
+        0o644
+    );
+
+    // Zapis z KILL_SUIDGID musi usunac SUID w tej samej transakcji.
+    repo.update_file_mode(file_id, "4644")?;
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let mode =
+        repo.query_scalar_text(&format!("SELECT mode FROM files WHERE id_file = {file_id}"))?;
+    assert_eq!(
+        u32::from_str_radix(mode.trim(), 8).map_err(|e| e.to_string())?,
+        0o644
+    );
+    Ok(())
+}
+
+#[test]
+fn persist_identical_block_preserves_file_identity_and_timestamps() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+
+    // Zainicjalizuj dane, aby drugi zapis byl naprawde identyczny.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let metadata_sql = format!(
+        "SELECT data_object_id::text, content_generation::text, \
+         modification_date::text, change_date::text \
+         FROM files WHERE id_file = {file_id}"
+    );
+    let before = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(before.len(), 1);
+
+    // Test regresyjny: ponowny zapis identycznej zawartosci nie zmienia metadanych.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    let after = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(after, before, "identical write changed file metadata");
+
+    // Zmiana chocby jednego bajtu musi uruchomic zwykla persystencje.
+    let changed_payload = vec![0x5b; bs as usize];
+    let changed_blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &changed_payload,
+        used_len: bs,
+    }];
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id,
+        bs,
+        bs,
+        1,
+        false,
+        &changed_blocks,
+        false,
+        None,
+        None,
+        None,
+        true,
+    )?;
+    let changed = repo.query_rows_text(&metadata_sql)?;
+    assert_ne!(
+        changed, after,
+        "changed write incorrectly classified as no-op"
+    );
+    Ok(())
+}
+
+#[test]
+fn persist_identical_write_does_not_accept_null_block_as_sparse_zero() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    // Osobna baza: uszkodzenie NOT NULL nie dotyka schematu testow FOD.
+    let (_temporary_db, repo) = repo_with_temporary_current_schema()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("null_noop_block"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_noop_seed"),
+    )?;
+    // Schemat w bazie tymczasowej nie ma wartosci konfiguracji z mkfs.
+    // Ustaw wymagany rozmiar bloku oraz limit pojemnosci tylko dla tego testu.
+    repo.exec(
+        "INSERT INTO config (key, value) VALUES
+         ('block_size', 32768),
+         ('max_fs_size_bytes', 1073741824)",
+    )?;
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let initial_payload = vec![0x5a; bs as usize];
+    let initial_blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &initial_payload,
+        used_len: bs,
+    }];
+
+    // Zapisz poprawny blok przed wprowadzeniem NULL do kopii testowej.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id,
+        bs,
+        bs,
+        1,
+        false,
+        &initial_blocks,
+        false,
+        None,
+        None,
+        None,
+        true,
+    )?;
+    repo.exec("ALTER TABLE data_blocks ALTER COLUMN data DROP NOT NULL")?;
+    repo.exec(&format!(
+        "UPDATE data_blocks SET data=NULL WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0"
+    ))?;
+    let before = repo.query_scalar_text(&format!(
+        "SELECT content_generation::text FROM files WHERE id_file={file_id}"
+    ))?;
+
+    // NULL nie jest brakujacym blokiem sparse: zapis zer ma go zastapic.
+    let zero_payload = vec![0u8; bs as usize];
+    let zero_blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &zero_payload,
+        used_len: bs,
+    }];
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id,
+        bs,
+        bs,
+        1,
+        false,
+        &zero_blocks,
+        false,
+        None,
+        None,
+        None,
+        true,
+    )?;
+    let after = repo.query_scalar_text(&format!(
+        "SELECT content_generation::text FROM files WHERE id_file={file_id}"
+    ))?;
+    assert_ne!(
+        after, before,
+        "NULL block was incorrectly classified as no-op"
+    );
+
+    let null_count = repo.query_scalar_text(&format!(
+        "SELECT count(*)::text FROM data_blocks WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0 AND data IS NULL"
+    ))?;
+    assert_eq!(null_count.trim(), "0", "NULL block survived zero rewrite");
+    Ok(())
+}
+
+#[test]
+fn persist_identical_killpriv_capability_ctime() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+
+    // Zapisz dane przed wstawieniem capability, aby nastepny zapis byl identyczny.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    repo.store_xattr_value_for_owner(
+        "file",
+        file_id,
+        "security.capability",
+        b"linux-capability-payload",
+    )?;
+    let metadata_sql = format!(
+        "SELECT modification_date::text, change_date::text, \
+         content_generation::text, data_object_id::text \
+         FROM files WHERE id_file = {file_id}"
+    );
+    let before = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(before.len(), 1);
+
+    // KILL_SUIDGID musi usunac capability, nawet gdy bajty pliku sa identyczne.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("file", file_id, "security.capability")?,
+        None
+    );
+    let after = repo.query_rows_text(&metadata_sql)?;
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0][0], before[0][0], "identical write changed mtime");
+    assert_ne!(
+        after[0][1], before[0][1],
+        "capability removal did not update ctime"
+    );
+    assert_eq!(
+        after[0][2], before[0][2],
+        "identical write changed generation"
+    );
+    assert_eq!(
+        after[0][3], before[0][3],
+        "identical write replaced data object"
+    );
+
+    // Kolejny identyczny zapis nie usuwa juz xattr i nie moze ruszac ctime.
+    repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        file_id, bs, bs, 1, false, &blocks, false, None, None, None, true,
+    )?;
+    assert_eq!(repo.query_rows_text(&metadata_sql)?, after);
+    Ok(())
+}
+
+#[test]
 fn kernel_killpriv_can_remove_capability_without_owner_authorization() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let fixture = NamespaceFixture::new()?;

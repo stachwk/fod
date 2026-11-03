@@ -14,6 +14,7 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use support::{block_size_from_config, unique_suffix, MountedFs};
 
@@ -772,9 +773,17 @@ fn concurrent_threads_unlink_and_replace_many_open_file_tasks() -> Result<(), St
                     fs::remove_file(&path).map_err(|err| {
                         format!("worker {worker_id} task {task_id} unlink failed: {err}")
                     })?;
-                    fs::write(&path, &replacement_payload).map_err(|err| {
-                        format!("worker {worker_id} task {task_id} replacement failed: {err}")
+                    // Rozdziel blad CREATE od bledu WRITE bez zmiany semantyki fs::write.
+                    // Pozwala to wskazac faze, ktora zwrocila EIO podczas testu.
+                    let mut replacement = fs::File::create(&path).map_err(|err| {
+                        format!(
+                            "worker {worker_id} task {task_id} replacement create failed: {err}"
+                        )
                     })?;
+                    replacement.write_all(&replacement_payload).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} replacement write failed: {err}")
+                    })?;
+                    drop(replacement);
 
                     let mut old_actual = Vec::new();
                     old_file
@@ -825,10 +834,22 @@ fn concurrent_threads_unlink_and_replace_many_open_file_tasks() -> Result<(), St
         })
         .collect::<Vec<_>>();
 
+    // Dolacz wszystkie watki takze po bledzie jednego z nich.
+    // Zapobiega to odmontowaniu FUSE, gdy inne operacje nadal trwaja.
+    let mut first_error = None;
     for worker in workers {
-        worker
+        let result = worker
             .join()
-            .map_err(|_| "open/unlink replacement worker panicked".to_string())??;
+            .map_err(|_| "open/unlink replacement worker panicked".to_string())
+            .and_then(|result| result);
+        if first_error.is_none() {
+            if let Err(err) = result {
+                first_error = Some(err);
+            }
+        }
+    }
+    if let Some(err) = first_error {
+        return Err(err);
     }
 
     fs::remove_dir_all(&root).map_err(|err| format!("remove task directory failed: {err}"))?;
@@ -1678,12 +1699,46 @@ fn verify_cross_mount_append_mode(mode: &str, direct_io: &str) -> Result<(), Str
     writer_a
         .sync_all()
         .map_err(|err| format!("mount A append sync failed: {err}"))?;
+
+    // Aktywny writer A musi blokowac konkurencyjne przejecie zapisu.
+    // Nie wolno poluzowac PostgreSQL ownership, aby naprawic test.
+    match OpenOptions::new().append(true).open(&path_b) {
+        Ok(_) => {
+            return Err("mount B acquired write ownership while mount A was open".to_string());
+        }
+        Err(err) if err.raw_os_error() == Some(libc::EBUSY) => {}
+        Err(err) => {
+            return Err(format!(
+                "mount B expected EBUSY while A held ownership, got {err}"
+            ));
+        }
+    }
     drop(writer_a);
 
-    let mut writer_b = OpenOptions::new()
-        .append(true)
-        .open(&path_b)
-        .map_err(|err| format!("mount B append open failed: {err}"))?;
+    // CLOSE/FLUSH zakonczyly zapis mount A, ale FUSE_RELEASE moze
+    // dotrzec do demona pozniej. Do tego czasu PostgreSQL celowo
+    // odmawia konkurencyjnego ownership przez EBUSY.
+    // Ponawiaj tylko EBUSY, maksymalnie 3 s; nie omijaj fencing.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut busy_retries = 0u32;
+    let mut writer_b = loop {
+        match OpenOptions::new().append(true).open(&path_b) {
+            Ok(file) => break file,
+            Err(err) => {
+                // Tylko przejsciowy konflikt prawa zapisu moze byc ponawiany.
+                if err.raw_os_error() != Some(libc::EBUSY) || Instant::now() >= deadline {
+                    return Err(format!(
+                        "mount B append open failed after {busy_retries} EBUSY retries: {err}"
+                    ));
+                }
+                busy_retries += 1;
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    };
+    if busy_retries > 0 {
+        eprintln!("mount B append open waited for FUSE_RELEASE EBUSY retries={busy_retries}");
+    }
     writer_b
         .write_all(b"-B")
         .map_err(|err| format!("mount B append failed: {err}"))?;

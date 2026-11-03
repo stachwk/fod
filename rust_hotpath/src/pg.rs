@@ -14711,6 +14711,102 @@ impl DbRepo {
                 if kill_suidgid {
                     DbRepo::clear_file_privileges_on_conn(conn, file_id)?;
                 }
+
+                // Sprawdz identycznosc danych w centralnej transakcji PostgreSQL.
+                // Ogranicz probe do pelnego pokrycia istniejacego pliku
+                // i najwyzej 16 blokow, aby nie spowalniac duzych zapisow.
+                // Rezerwacje, truncate, autoryzacje truncate i utrzymanie CRC
+                // korzystaja z dotychczasowej sciezki persystencji.
+                if !truncate_pending
+                    && capacity_reservation_token.is_none()
+                    && write_authorization.is_none()
+                    && !maintain_copy_crc_table
+                    && blocks.len() <= 16
+                    && persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks)
+                {
+                    let file_id_text = CString::new(file_id.to_string())
+                        .map_err(|_| "file id contains NUL byte".to_string())?;
+                    // Blokada chroni dane pliku i identyfikator obiektu przed
+                    // zmiana przez rownolegly zapis do konca tej transakcji.
+                    let select_file = CString::new(
+                        "SELECT size::text, data_object_id::text FROM files WHERE id_file=$1 FOR UPDATE",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let file_row = fetch_optional_single_row_texts_exact(
+                        exec_params(conn, &select_file, &[&file_id_text])?,
+                        2,
+                        "identical write file metadata",
+                    )?;
+                    if let Some(file_row) = file_row {
+                        let stored_size = file_row[0].trim().parse::<u64>().map_err(|_| {
+                            "invalid file size during identical write".to_string()
+                        })?;
+                        if stored_size == file_size {
+                            let object_id = file_row[1].trim().parse::<u64>().map_err(|_| {
+                                "invalid data object id during identical write".to_string()
+                            })?;
+                            let object_id_text = CString::new(object_id.to_string())
+                                .map_err(|_| "data object id contains NUL byte".to_string())?;
+                            let compare_block = CString::new(
+                                "SELECT COALESCE((SELECT COALESCE(data = $3::bytea, FALSE) FROM data_blocks \
+                                 WHERE data_object_id=$1 AND _order=$2), $4::boolean)",
+                            )
+                            .map_err(|_| "SQL contains NUL byte".to_string())?;
+                            let mut all_identical = true;
+                            for block in blocks {
+                                let block_index_text =
+                                    CString::new(block.block_index.to_string())
+                                        .map_err(|_| "block index contains NUL byte".to_string())?;
+                                // Transport bez COPY usuwa bloki czesciowe;
+                                // COPY zapisuje ich znormalizowane bajty.
+                                let normalized = if block.used_len < block_size
+                                    && !matches!(
+                                        self.persist_block_transport,
+                                        PersistBlockTransport::CopyBinaryStaging
+                                    )
+                                {
+                                    Cow::Owned(vec![0u8; block_size.max(1) as usize])
+                                } else {
+                                    normalized_block_bytes_cow(
+                                        block.data,
+                                        block_size.max(1) as usize,
+                                    )
+                                };
+                                let missing_is_zero = CString::new(
+                                    if is_all_zero_block(normalized.as_ref()) {
+                                        "true"
+                                    } else {
+                                        "false"
+                                    },
+                                )
+                                .map_err(|_| "boolean contains NUL byte".to_string())?;
+                                let params = [
+                                    SqlParam::Text(&object_id_text),
+                                    SqlParam::Text(&block_index_text),
+                                    SqlParam::Binary(normalized.as_ref()),
+                                    SqlParam::Text(&missing_is_zero),
+                                ];
+                                let same = fetch_single_text(exec_params_with_formats(
+                                    conn,
+                                    &compare_block,
+                                    &params,
+                                )?)?;
+                                if !parse_postgres_bool(&same, "identical write block")? {
+                                    all_identical = false;
+                                    break;
+                                }
+                            }
+                            if all_identical {
+                                // Zachowaj kontrole kwoty rowniez dla zapisu no-op.
+                                // Fencing, autoryzacja i KILL_SUIDGID zostaly
+                                // obsluzone; nie zmieniaj generacji ani mtime.
+                                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
+                                return self
+                                    .enforce_payload_quota_on_conn(conn, &quota_lock, None);
+                            }
+                        }
+                    }
+                }
                 if capacity_reservation_token.is_some() {
                     let quota_lock = self.lock_payload_quota_on_conn(conn)?;
                     self.refresh_payload_reservation_on_conn(

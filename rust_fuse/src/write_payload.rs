@@ -31,10 +31,6 @@ impl WritePayloadState {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        *self = Self::default();
-    }
-
     pub(crate) fn as_blocks(&self) -> Option<&BTreeMap<u64, Vec<u8>>> {
         match self {
             Self::BlockOverlay(state) => Some(state.blocks.as_ref()),

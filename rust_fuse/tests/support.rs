@@ -557,6 +557,28 @@ impl Drop for MountedFs {
             let _ = libc::kill(process_group, libc::SIGKILL);
         }
         print_profile_io_summaries_if_enabled(&self.log_path);
+        // Zachowaj logi montowan testowych poza katalogiem roboczym na zadanie.
+        // Domyslnie sprzatanie testow pozostaje bez zmian.
+        if let Some(log_dir) = env::var_os("FOD_TEST_LOG_DIR").filter(|value| !value.is_empty()) {
+            let log_dir = PathBuf::from(log_dir);
+            let log_name = self
+                .workspace
+                .file_name()
+                .map(|name| format!("{}.log", name.to_string_lossy()));
+            if let Some(log_name) = log_name {
+                let dest = log_dir.join(log_name);
+                let result = fs::create_dir_all(&log_dir)
+                    .and_then(|_| fs::copy(&self.log_path, &dest).map(|_| ()));
+                match result {
+                    Ok(()) => eprintln!("FOD test mount log preserved: {}", dest.display()),
+                    Err(err) => eprintln!(
+                        "FOD failed to preserve mount log from {}: {}",
+                        self.log_path.display(),
+                        err
+                    ),
+                }
+            }
+        }
         if !try_unmount(&self.mountpoint) {
             eprintln!(
                 "FOD test mount remains attached; preserving its workspace to avoid walking into the mounted filesystem: mountpoint={} workspace={} log={}",

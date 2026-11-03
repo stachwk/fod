@@ -142,9 +142,32 @@ fn acl_has_permissions(
     Ok(other.unwrap_or(0) & requested == requested)
 }
 
+// Wyznacz mode po zgloszeniu KILL_SUIDGID bez zmiany pozostalych bitow.
+fn mode_after_kill_suidgid(current_mode: u32) -> u32 {
+    let mut mode = current_mode & !0o4000;
+    if current_mode & 0o2010 == 0o2010 {
+        mode &= !0o2000;
+    }
+    mode
+}
+
 #[cfg(test)]
 mod tests {
-    use super::acl_has_permissions;
+    use super::{acl_has_permissions, mode_after_kill_suidgid};
+
+    #[test]
+    fn killpriv_mode_without_privileges_remains_unchanged() {
+        assert_eq!(mode_after_kill_suidgid(0o644), 0o644);
+        assert_eq!(mode_after_kill_suidgid(0o755), 0o755);
+    }
+
+    #[test]
+    fn killpriv_mode_clears_suid_and_conditional_sgid() {
+        assert_eq!(mode_after_kill_suidgid(0o4755), 0o755);
+        assert_eq!(mode_after_kill_suidgid(0o2755), 0o755);
+        assert_eq!(mode_after_kill_suidgid(0o2745), 0o2745);
+        assert_eq!(mode_after_kill_suidgid(0o6755), 0o755);
+    }
 
     fn make_acl(entries: &[(u16, u16, u32)]) -> Vec<u8> {
         let mut acl = 2u32.to_le_bytes().to_vec();
@@ -591,20 +614,30 @@ impl DbRepo {
             return Err("invalid file mode row while clearing privilege metadata".to_string());
         }
         let current_mode = parse_persisted_posix_mode(&row[0])?;
-        let mut mode = current_mode & !0o4000;
-        if current_mode & 0o2010 == 0o2010 {
-            mode &= !0o2000;
+        let mode = mode_after_kill_suidgid(current_mode);
+        // Nie aktualizuj ctime, jezeli bity przywilejow juz sa wyczyszczone.
+        // Blokada FOR UPDATE pozostaje aktywna do konca transakcji PostgreSQL.
+        if mode != current_mode {
+            let mode = CString::new(format!("{mode:o}"))
+                .map_err(|_| "mode contains NUL byte".to_string())?;
+            let update_mode = CString::new(
+                "UPDATE files SET mode=$1, change_date=clock_timestamp() WHERE id_file=$2",
+            )
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+            exec_command_params(conn, &update_mode, &[&mode, &file_id])?;
         }
-        let mode =
-            CString::new(format!("{mode:o}")).map_err(|_| "mode contains NUL byte".to_string())?;
-        let update_mode = CString::new(
-            "UPDATE files SET mode=$1, change_date=clock_timestamp() WHERE id_file=$2",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        exec_command_params(conn, &update_mode, &[&mode, &file_id])?;
 
+        // Usuniecie security.capability jest zmiana metadanych inode.
+        // Aktualizuj ctime tylko jesli DELETE rzeczywiscie usunal xattr.
+        // WITH utrzymuje operacje w jednej transakcji z blokada wiersza pliku.
         let delete_capability = CString::new(
-            "DELETE FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='security.capability'",
+            "WITH removed AS (
+                DELETE FROM xattrs
+                WHERE owner_kind='file' AND owner_id=$1 AND name='security.capability'
+                RETURNING owner_id
+             )
+             UPDATE files SET change_date=clock_timestamp()
+             WHERE id_file=$1 AND EXISTS (SELECT 1 FROM removed)",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         exec_command_params(conn, &delete_capability, &[&file_id])

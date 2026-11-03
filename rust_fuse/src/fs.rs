@@ -4135,7 +4135,13 @@ impl FodFuse {
 
     fn attrs_for_open_file_id(&self, file_id: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let authority = self.repo.authoritative_view();
-        let blob = authority.fetch_file_attrs_blob(file_id).map_err(|_| EIO)?;
+        let blob = authority.fetch_file_attrs_blob(file_id).map_err(|err| {
+            warn!(
+                "FOD open_file_attrs_error file_id={} phase=fetch_file_attrs err={}",
+                file_id, err
+            );
+            EIO
+        })?;
         let Some(blob) = blob else {
             return Ok(None);
         };
@@ -4160,16 +4166,37 @@ impl FodFuse {
         let mut rdev = 0;
         if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
-            .map_err(|_| EIO)?
-        {
+            .map_err(|err| {
+            warn!(
+                "FOD open_file_attrs_error file_id={} phase=special_metadata err={}",
+                file_id, err
+            );
+            EIO
+        })? {
             kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
             rdev = Self::encode_fuse_rdev(major, minor)?;
         }
 
         let nlink = authority
             .file_link_count_for_stat(raw_inode)
-            .map_err(|_| EIO)?
-            .ok_or(EIO)?;
+            .map_err(|err| {
+                warn!(
+                    "FOD open_file_attrs_error file_id={} phase=link_count err={}",
+                    file_id, err
+                );
+                EIO
+            })?;
+        // Miedzy odczytem atrybutow i liczby dowiazan inny watek
+        // mogl zakonczyc deferred unlink i usunac wiersz pliku.
+        // Brak wiersza to zakonczona finalizacja, a nie blad SQL.
+        // Nie przerywaj przez to getattr dla innego otwartego inode.
+        let Some(nlink) = nlink else {
+            debug!(
+                "FOD open_file_attrs_finalized file_id={} phase=link_count_missing",
+                file_id
+            );
+            return Ok(None);
+        };
         let inode = self.stable_inode("file", &inode_seed, raw_inode)?;
         Ok(Some(ParsedAttrs {
             inode_seed,
@@ -4252,7 +4279,19 @@ impl FodFuse {
             .collect::<HashSet<_>>();
 
         for file_id in file_ids {
-            if let Some(attrs) = self.attrs_for_open_file_id(file_id)? {
+            // Diagnostyka: odczyt innego otwartego pliku moze przerwac
+            // wyszukiwanie atrybutow docelowego inode.
+            let candidate = match self.attrs_for_open_file_id(file_id) {
+                Ok(candidate) => candidate,
+                Err(errno) => {
+                    warn!(
+                        "FOD open_inode_candidate_error requested_ino={} candidate_file_id={} errno={}",
+                        ino, file_id, errno
+                    );
+                    return Err(errno);
+                }
+            };
+            if let Some(attrs) = candidate {
                 if attrs.file_attr.ino.0 == ino {
                     return Ok(Some(attrs));
                 }
@@ -6376,7 +6415,13 @@ impl Filesystem for FodFuse {
                     // row for an open, unlinked inode. `fstat()` must remain
                     // bound to that live file_id and must not reauthorize its
                     // former pathname after the parent has been removed.
-                    if attrs.file_attr.kind == FileType::RegularFile {
+                    // Dla pliku nadal dowiazanego sciezka wskazuje juz
+                    // wlasciwy inode. Nie skanuj innych otwartych uchwytow:
+                    // ich wiersze moga wlasnie znikac podczas deferred unlink.
+                    // Fallback po file_id jest potrzebny tylko przy nlink=0.
+                    if matches!(attrs.file_attr.kind, FileType::RegularFile)
+                        && attrs.file_attr.nlink == 0
+                    {
                         match self.attrs_for_open_inode(ino) {
                             Ok(Some(open_attrs)) if open_attrs.file_attr.nlink == 0 => {
                                 reply.attr(&self.attr_cache_ttl_live(), &open_attrs.file_attr);
@@ -6384,6 +6429,12 @@ impl Filesystem for FodFuse {
                             }
                             Ok(_) => {}
                             Err(errno) => {
+                                self.log_request_error(
+                                    req_id,
+                                    "getattr",
+                                    errno,
+                                    format!("ino={} path={} phase=open_inode_probe", ino, path),
+                                );
                                 fuse_reply_error!(reply, errno);
                                 return;
                             }
@@ -10366,11 +10417,24 @@ impl Filesystem for FodFuse {
             .unwrap_or(existing_size);
         let has_sibling_states = !sibling_states.is_empty();
         let end_offset = offset.saturating_add(data.len() as u64);
+        let kill_suidgid = write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID);
+        // Diagnostyka pokazuje, dlaczego bezpieczny odczyt porownawczy zostal pominiety.
+        // Nie zmienia warunkow dopuszczajacych optymalizacje zapisu.
+        debug!(
+            "FOD req={} op=write noop_probe state_present={} sibling_count={} existing_size={} offset={} end_offset={} kill_suidgid={}",
+            req_id,
+            existing_state.is_some(),
+            sibling_states.len(),
+            existing_size,
+            offset,
+            end_offset,
+            kill_suidgid
+        );
         if existing_state.is_none()
             && !has_sibling_states
             && offset <= existing_size
             && end_offset <= existing_size
-            && !write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID)
+            && !kill_suidgid
         {
             let first_block = offset / self.block_size;
             let last_block = (end_offset.saturating_sub(1)) / self.block_size;
@@ -10387,6 +10451,20 @@ impl Filesystem for FodFuse {
                 self.block_size,
             );
             self.record_write_unchanged_probe_elapsed(probe_started.elapsed());
+            // Raportuj wynik odczytu, nawet gdy dane nie sa identyczne.
+            match &existing {
+                Ok(bytes) => debug!(
+                    "FOD req={} op=write noop_probe_result equal={} actual_len={} expected_len={}",
+                    req_id,
+                    bytes == data,
+                    bytes.len(),
+                    data.len()
+                ),
+                Err(errno) => debug!(
+                    "FOD req={} op=write noop_probe_result read_errno={}",
+                    req_id, errno
+                ),
+            }
             if let Ok(existing) = existing {
                 if existing == data {
                     debug!(
