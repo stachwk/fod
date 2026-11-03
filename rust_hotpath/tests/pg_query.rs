@@ -5166,7 +5166,17 @@ fn persist_identical_write_does_not_accept_null_block_as_sparse_zero() -> Result
 
     // Zapisz poprawny blok przed wprowadzeniem NULL do kopii testowej.
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
-        file_id, bs, bs, 1, false, &initial_blocks, false, None, None, None, true,
+        file_id,
+        bs,
+        bs,
+        1,
+        false,
+        &initial_blocks,
+        false,
+        None,
+        None,
+        None,
+        true,
     )?;
     repo.exec("ALTER TABLE data_blocks ALTER COLUMN data DROP NOT NULL")?;
     repo.exec(&format!(
@@ -5184,12 +5194,25 @@ fn persist_identical_write_does_not_accept_null_block_as_sparse_zero() -> Result
         used_len: bs,
     }];
     repo.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
-        file_id, bs, bs, 1, false, &zero_blocks, false, None, None, None, true,
+        file_id,
+        bs,
+        bs,
+        1,
+        false,
+        &zero_blocks,
+        false,
+        None,
+        None,
+        None,
+        true,
     )?;
     let after = repo.query_scalar_text(&format!(
         "SELECT content_generation::text FROM files WHERE id_file={file_id}"
     ))?;
-    assert_ne!(after, before, "NULL block was incorrectly classified as no-op");
+    assert_ne!(
+        after, before,
+        "NULL block was incorrectly classified as no-op"
+    );
 
     let null_count = repo.query_scalar_text(&format!(
         "SELECT count(*)::text FROM data_blocks WHERE data_object_id=(SELECT data_object_id FROM files WHERE id_file={file_id}) AND _order=0 AND data IS NULL"
