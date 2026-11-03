@@ -5156,6 +5156,13 @@ fn persist_identical_write_does_not_accept_null_block_as_sparse_zero() -> Result
         1000,
         &unique_name("null_noop_seed"),
     )?;
+    // Schemat w bazie tymczasowej nie ma wartosci konfiguracji z mkfs.
+    // Ustaw wymagany rozmiar bloku oraz limit pojemnosci tylko dla tego testu.
+    repo.exec(
+        "INSERT INTO config (key, value) VALUES
+         ('block_size', 32768),
+         ('max_fs_size_bytes', 1073741824)",
+    )?;
     let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
     let initial_payload = vec![0x5a; bs as usize];
     let initial_blocks = [PersistBlockRow {
