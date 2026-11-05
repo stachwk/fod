@@ -3189,7 +3189,7 @@ test-tx03j-strict-coherence:
 	  --strict-reads --pg-snapshot --held-reader --require-coherent
 
 
-# PR30: dwa niezalezne demony FUSE na jednym hoście, PostgreSQL Primary na QNAP.
+# PR30: dwa niezalezne demony FUSE na jednym hoscie, PostgreSQL Primary na QNAP.
 # Ten target nie uruchamia Docker Compose, reset ani mkfs init/upgrade.
 # Baza musi byc gotowa i miec wyraznie testowa nazwe *_test.
 .PHONY: test-pr30-qnap-remote-ownership test-pr30-qnap-remote-ownership-full
