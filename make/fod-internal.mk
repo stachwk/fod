@@ -3187,3 +3187,45 @@ test-tx03j-strict-coherence:
 	FOD_PG_DBNAME="$(FOD_PG_DBNAME)" POSTGRES_DB="$(POSTGRES_DB)" \
 	$(VENV_PYTHON) tests/integration/test_tx03j_cross_mount_cache.py \
 	  --strict-reads --pg-snapshot --held-reader --require-coherent
+
+
+# PR30: dwa niezalezne demony FUSE na jednym hoście, PostgreSQL Primary na QNAP.
+# Ten target nie uruchamia Docker Compose, reset ani mkfs init/upgrade.
+# Baza musi byc gotowa i miec wyraznie testowa nazwe *_test.
+.PHONY: test-pr30-qnap-remote-ownership test-pr30-qnap-remote-ownership-full
+
+test-pr30-qnap-remote-ownership: build-runtime venv
+	@if [ -z "$(QNAP_ENABLED)" ]; then \
+		echo "ERROR: use QNAP=1 for remote PostgreSQL ownership tests" >&2; exit 2; \
+	fi
+	@case "$(FOD_REMOTE_PG_DBNAME)" in \
+		*_test) ;; \
+		*) echo "ERROR: remote database must end in _test; refusing production DB" >&2; exit 2 ;; \
+	esac
+	@if [ "$(FOD_REMOTE_PG_DBNAME)" != "$(QNAP_PG_DBNAME)" ] || \
+	   [ "$(FOD_REMOTE_PG_HOST)" != "$(QNAP_PG_HOST)" ] || \
+	   [ "$(FOD_REMOTE_PG_PORT)" != "$(QNAP_PG_PORT)" ]; then \
+		echo "ERROR: FOD_REMOTE_PG_* and QNAP_PG_* refer to different endpoints" >&2; exit 2; \
+	fi
+	@role="$$(PGPASSWORD="$(FOD_REMOTE_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 \
+		-h "$(FOD_REMOTE_PG_HOST)" -p "$(FOD_REMOTE_PG_PORT)" \
+		-U "$(FOD_REMOTE_PG_USER)" -d "$(FOD_REMOTE_PG_DBNAME)" \
+		-Atqc "SELECT CASE WHEN pg_is_in_recovery() THEN 'standby' ELSE 'primary' END")"; \
+	rc=$$?; \
+	if [ "$$rc" -ne 0 ] || [ "$$role" != primary ]; then \
+		echo "ERROR: remote test DB must exist on writable PostgreSQL Primary" >&2; exit 2; \
+	fi
+	@status="$$( $(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>&1 )"; \
+	rc=$$?; \
+	if [ "$$rc" -ne 0 ] || ! printf '%s\n' "$$status" | grep -Fq 'FOD ready: yes'; then \
+		echo "ERROR: remote test DB schema not ready; no automatic mkfs init or upgrade" >&2; \
+		printf '%s\n' "$$status" >&2; exit 2; \
+	fi
+	@echo "PR30 QNAP preflight PASS: remote writable PostgreSQL, isolated ready *_test DB"
+	@$(FOD_REMOTE_PG_ENV) $(VENV_PYTHON) tests/integration/test_copy_file_range_multimount_ownership.py
+
+# Rozszerzona walidacja: C8 manipuluje lease jedynie dla unikalnego pliku testowego.
+# Dodatkowy test kopiowania 64 MiB moze byc wolniejszy przez siec i dyski QNAP.
+test-pr30-qnap-remote-ownership-full: test-pr30-qnap-remote-ownership
+	@$(FOD_REMOTE_PG_ENV) $(VENV_PYTHON) tests/integration/test_copy_file_range_stale_multimount.py
+	@$(FOD_REMOTE_PG_ENV) $(VENV_PYTHON) tests/integration/test_dual_host_same_file_cp_race.py
