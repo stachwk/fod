@@ -116,6 +116,25 @@ bedzie diagnostyka opóznien, nie usuniecie fencing.
 
 ## Status
 
-Nie uruchomiono testow przeciwko QNAP; kod i targety sa przygotowane
-do wykonania na lokalnym lt7300. Wyniki lokalne PR #30 (99/99 PASS)
-nie dowodza poprawnosci komunikacji z QNAP.
+2026-11-07 testy wykonano z `lt7300` do dedykowanej bazy
+`fod_pr30_qnap_test` na QNAP `192.168.1.11:5432`. Przed uruchomieniem
+potwierdzono PostgreSQL 16.15 Primary, `pg_config --configure` z
+`--with-blocksize=32`, runtime `SHOW block_size=32768` i schemat FOD 39.
+`fod-rust-mkfs status` (FOD 3.4.536) zwrocil `Latest schema shape: yes`,
+`FOD ready: yes` i brak pending migrations. Testy nie wykonywaly `init`,
+`upgrade` ani resetu schematu.
+
+Target `test-pr30-qnap-remote-ownership-full` zakonczyl sie kodem 0:
+
+- C7 PASS: dwa mounty; przegrywajacy zapis otrzymal `EBUSY` (errno 16),
+  poprawne dane, `bytes=65536`.
+- C8 PASS: fencing token zmienil sie `11->12`; stary uchwyt otrzymal
+  `EIO` (errno 5), wlasciciel z nowym tokenem wykonal zapis.
+- 64 MiB same-file copy race PASS: A wygral, B otrzymal `EBUSY`, oba
+  mounty widzialy hash zwycieskiej kopii, `ownership_leaks=0`.
+
+To byly dwa niezalezne procesy FUSE na jednym hoście klienckim `lt7300`,
+nie test dwoch hostow Linux. Nie sprawdzono osobnego RTT ani macierzy
+obciazenia `no-op` 1–16 blokow; pozostaja poza tym przebiegiem. Testowano
+wylacznie `fod_pr30_qnap_test`; produkcyjna `foddbname` nie byla celem
+polaczen ani testow.

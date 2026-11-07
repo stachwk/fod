@@ -634,7 +634,7 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                       AND c.data_type = 'bigint'
                 )
             )
-            AND NOT EXISTS (
+            AND EXISTS (
                 SELECT 1
                 FROM information_schema.columns c
                 WHERE c.table_schema = 'fod'

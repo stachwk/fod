@@ -609,6 +609,9 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
          ALTER TABLE symlinks DROP CONSTRAINT IF EXISTS symlinks_name_octet_length_check;
          ALTER TABLE xattrs DROP CONSTRAINT IF EXISTS xattrs_name_octet_length_check;
          ALTER TABLE destination_write_leases DROP CONSTRAINT IF EXISTS destination_write_leases_name_octet_length_check;
+         ALTER TABLE index_import_plans
+             DROP COLUMN materialize_lease_expires_at,
+             DROP COLUMN materialize_fencing_token;
          UPDATE schema_version SET schema_number = 16, applied_at = NOW();"
     ))
     .expect("prepare schema version 16 block payload fixture");
@@ -1139,6 +1142,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Active schema: fod",
         "fod objects: yes",
         "Latest migration version: 39",
+        "Latest schema shape: yes",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -1203,6 +1207,8 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
          ALTER TABLE destination_write_leases DROP CONSTRAINT destination_write_leases_name_octet_length_check; \
          ALTER TABLE files DROP CONSTRAINT IF EXISTS files_mode_octal_check; \
          ALTER TABLE directories DROP CONSTRAINT IF EXISTS directories_mode_octal_check; \
+         ALTER TABLE index_import_plans DROP COLUMN materialize_lease_expires_at; \
+         ALTER TABLE index_import_plans DROP COLUMN materialize_fencing_token; \
          ALTER TABLE schema_version DROP COLUMN upgrade_in_progress; \
          UPDATE schema_version SET schema_number = 31",
     )
@@ -1540,6 +1546,9 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
          ALTER TABLE fod.symlinks DROP CONSTRAINT symlinks_name_octet_length_check;
          ALTER TABLE fod.xattrs DROP CONSTRAINT xattrs_name_octet_length_check;
          ALTER TABLE fod.destination_write_leases DROP CONSTRAINT destination_write_leases_name_octet_length_check;
+         ALTER TABLE fod.index_import_plans
+             DROP COLUMN materialize_lease_expires_at,
+             DROP COLUMN materialize_fencing_token;
          UPDATE fod.schema_version SET schema_number = 21, applied_at = NOW();",
     )
     .expect("prepare schema version 21 with legacy redundant data_blocks index");

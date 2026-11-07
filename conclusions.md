@@ -3057,3 +3057,31 @@ The `test-all` SELinux mount-label scenario still skipped on this host when the
 kernel rejected the label-bearing FUSE mount options with `EINVAL`; this matches
 the documented host/mount-stack limitation and is separate from the runtime
 profile mapping change.
+
+## FOD 3.4.536 schema-39 validation and PR #30 QNAP run (2026-11-07)
+
+`fod-rust-mkfs status` rejected a valid schema 39 because its latest-shape
+predicate required `index_import_plans.materialize_lease_expires_at` to be
+absent, while both `base_schema.sql` and migration 0039 define it as
+`TIMESTAMPTZ`. Changed that predicate from `NOT EXISTS` to `EXISTS` and added
+an explicit fresh-init status assertion. Schema-upgrade fixtures now remove
+0039-only columns when they emulate schemas 16, 21 and 31 from the current base
+schema, so they represent the historical shapes being upgraded.
+
+Validation used a disposable local PostgreSQL 16.15 database with compiled
+`--with-blocksize=32` and runtime `block_size=32768`; the QNAP test endpoint was
+independently checked as Primary PostgreSQL 16.15 with the same build flag and
+runtime page size. QNAP database `fod_pr30_qnap_test`, schema 39, reported
+`Latest schema shape: yes`, `FOD ready: yes`, no pending migrations. The
+full PR #30 QNAP target passed C7, C8 and the 64 MiB same-file copy race using
+two FUSE mounts on `lt7300`; this is not evidence for two separate Linux hosts.
+Production database `foddbname` was not targeted. The separate RTT and 1–16
+block no-op load measurements remain outstanding.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all --check` | passed |
+| `cargo test --locked -p fod-rust-mkfs` | passed on isolated local 32 KiB PostgreSQL |
+| `cargo check --workspace --locked` | passed with project libfuse 3.18.3 selected |
+| `make test-version` | passed for FOD 3.4.536 |
+| `test-pr30-qnap-remote-ownership-full` | passed: C7/C8 and 64 MiB copy race |
