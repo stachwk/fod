@@ -3103,3 +3103,19 @@ The write timer covers `write_all` through file close; readback is measured on
 the warmed mount. These samples have high variation and must not be used as a
 version comparison or cold-read result. The QNAP database remains dedicated
 test data; production `foddbname` was not contacted.
+
+## FOD 3.4.538 QNAP repeated no-op diagnostics (2026-11-07)
+
+Repeated the 1–16 block no-op measurements three times per payload size on
+`fod_pr30_qnap_test`. Before the run, confirmed PostgreSQL 16.15 Primary,
+schema 39, runtime `block_size=32768`, and the custom `pg_config` build flag
+`--with-blocksize=32`. A persistent connection measured 20 `SELECT 1` RTTs
+after five warmups: median 1.274 ms and p95 4.205 ms. Per-size medians and
+min/max ranges are recorded in
+[`docs/plans/FOD_PR30_QNAP_PRIMARY_MULTIMOUNT.md`](docs/plans/FOD_PR30_QNAP_PRIMARY_MULTIMOUNT.md).
+
+The repeated samples still vary materially and show no monotonic relationship
+between payload block count and elapsed time; one 12-block read took
+1279.859 ms. Treat these results as diagnostics, not a performance baseline.
+All runs used unique files in the dedicated test database, from one client
+host; production `foddbname` was not contacted.

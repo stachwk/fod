@@ -173,3 +173,38 @@ nie test dwoch hostow Linux. Dla I/O nie wykonano macierzy powtorzen;
 wynikow nie uzywac do porownywania wersji. Testowano
 wylacznie `fod_pr30_qnap_test`; produkcyjna `foddbname` nie byla celem
 polaczen ani testow.
+
+#### Powtorzony pomiar no-op
+
+2026-11-07 wykonano ponownie po trzy proby dla kazdej wielkosci 1–16
+blokow. Przed pomiarem sprawdzono endpoint `fod_pr30_qnap_test`, Primary,
+PostgreSQL 16.15, kompilacje `pg_config --with-blocksize=32`, runtime
+`block_size=32768` i schemat 39. RTT z 20 zapytan `SELECT 1` po 5 probach
+rozgrzewkowych wynioslo: mediana `1.274 ms`, p95 `4.205 ms`. Kazda proba
+uzywala osobnej sciezki/pliku. Tabela pokazuje mediany oraz zakres trzech
+prob; odczyt nadal odbywal sie na rozgrzanym mountcie.
+
+| Bloki | Zapis mediana ms (min–max) | Odczyt mediana ms (min–max) |
+| ---: | ---: | ---: |
+| 1 | 91.884 (86.360–95.483) | 249.459 (248.863–256.982) |
+| 2 | 94.335 (75.103–111.991) | 271.289 (195.397–377.513) |
+| 3 | 85.332 (80.841–97.301) | 213.702 (191.524–334.837) |
+| 4 | 136.812 (105.737–142.433) | 307.584 (256.369–341.185) |
+| 5 | 106.471 (86.951–160.056) | 195.264 (190.060–311.511) |
+| 6 | 183.157 (144.305–356.745) | 308.821 (236.130–399.519) |
+| 7 | 171.216 (147.624–171.475) | 306.271 (247.408–324.833) |
+| 8 | 110.182 (90.118–218.547) | 238.933 (164.146–255.354) |
+| 9 | 170.929 (123.854–239.497) | 330.751 (250.321–354.052) |
+| 10 | 165.896 (147.238–271.840) | 309.110 (296.070–394.738) |
+| 11 | 124.297 (123.368–180.354) | 206.273 (174.954–279.797) |
+| 12 | 210.279 (173.523–537.968) | 292.373 (258.738–1279.859) |
+| 13 | 169.280 (131.166–215.183) | 230.112 (228.927–293.788) |
+| 14 | 187.665 (162.051–215.534) | 221.893 (220.146–222.380) |
+| 15 | 217.974 (165.117–226.894) | 302.975 (232.028–311.130) |
+| 16 | 151.194 (150.304–221.747) | 212.602 (198.090–247.027) |
+
+Powtorzenia potwierdzaja znaczny rozrzut i brak monotonicznego trendu wzrostu
+czasu wraz z liczba blokow; przy 12 blokach wystapil pojedynczy odczyt
+`1279.859 ms`. To nadal pomiar orientacyjny, nie baseline wydajnosci ani
+diagnoza zrodla opoznien. Wykonano go z jednego hosta klienta `lt7300`,
+wylacznie na bazie testowej; produkcyjna `foddbname` nie byla uzywana.
