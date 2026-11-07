@@ -102,13 +102,14 @@ fn write_full_payload(file_path: &Path, payload: &[u8], truncate: bool) -> Resul
     Ok(start.elapsed().as_secs_f64())
 }
 
-fn verify_payload(file_path: &Path, expected: &[u8]) -> Result<(), String> {
+fn verify_payload(file_path: &Path, expected: &[u8]) -> Result<f64, String> {
+    let start = Instant::now();
     let read_back = fs::read(file_path)
         .map_err(|err| format!("read_back {} failed: {err}", file_path.display()))?;
     if read_back != expected {
         return Err("data_blocks conflict payload mismatch".to_string());
     }
-    Ok(())
+    Ok(start.elapsed().as_secs_f64())
 }
 
 fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
@@ -146,7 +147,7 @@ fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
         &mounted,
         write_full_payload(&file_path, &overwrite_payload, false),
     )?;
-    with_mount_log(&mounted, verify_payload(&file_path, &overwrite_payload))?;
+    let read_elapsed = with_mount_log(&mounted, verify_payload(&file_path, &overwrite_payload))?;
     let throughput_mib_s = if elapsed > 0.0 {
         (total as f64 / 1024.0 / 1024.0) / elapsed
     } else {
@@ -154,7 +155,7 @@ fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
     };
 
     println!(
-        "OK {name} bytes={} id={} block_size={} block_count={} elapsed_s={elapsed:.6} throughput_mib_s={throughput_mib_s:.2}",
+        "OK {name} bytes={} id={} block_size={} block_count={} elapsed_s={elapsed:.6} read_elapsed_s={read_elapsed:.6} throughput_mib_s={throughput_mib_s:.2}",
         total,
         conflict_id(),
         block_size,

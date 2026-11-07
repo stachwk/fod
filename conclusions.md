@@ -3075,8 +3075,9 @@ runtime page size. QNAP database `fod_pr30_qnap_test`, schema 39, reported
 `Latest schema shape: yes`, `FOD ready: yes`, no pending migrations. The
 full PR #30 QNAP target passed C7, C8 and the 64 MiB same-file copy race using
 two FUSE mounts on `lt7300`; this is not evidence for two separate Linux hosts.
-Production database `foddbname` was not targeted. The separate RTT and 1–16
-block no-op load measurements remain outstanding.
+Production database `foddbname` was not targeted. RTT and single-sample
+1–16 block no-op measurements were collected in the FOD 3.4.537 follow-up
+below; they are diagnostic only, not a performance baseline.
 
 | Command | Result |
 | --- | --- |
@@ -3085,3 +3086,20 @@ block no-op load measurements remain outstanding.
 | `cargo check --workspace --locked` | passed with project libfuse 3.18.3 selected |
 | `make test-version` | passed for FOD 3.4.536 |
 | `test-pr30-qnap-remote-ownership-full` | passed: C7/C8 and 64 MiB copy race |
+
+## FOD 3.4.537 QNAP RTT and no-op diagnostics (2026-11-07)
+
+Repeated the read-only endpoint checks against `fod_pr30_qnap_test` before the
+benchmark: PostgreSQL 16.15 Primary, schema 39, runtime `block_size=32768`,
+and custom `pg_config --configure` with `--with-blocksize=32`. A persistent
+PostgreSQL connection returned 100 measured `SELECT 1` round trips after five
+warmups: median 1.448 ms, p95 5.054 ms, mean 4.407 ms.
+
+The updated FUSE conflict benchmark reports readback validation time as well as
+its existing same-payload write time. One sample per payload size (1–16 blocks
+of 32 KiB) is recorded in
+[`docs/plans/FOD_PR30_QNAP_PRIMARY_MULTIMOUNT.md`](docs/plans/FOD_PR30_QNAP_PRIMARY_MULTIMOUNT.md).
+The write timer covers `write_all` through file close; readback is measured on
+the warmed mount. These samples have high variation and must not be used as a
+version comparison or cold-read result. The QNAP database remains dedicated
+test data; production `foddbname` was not contacted.

@@ -133,8 +133,43 @@ Target `test-pr30-qnap-remote-ownership-full` zakonczyl sie kodem 0:
 - 64 MiB same-file copy race PASS: A wygral, B otrzymal `EBUSY`, oba
   mounty widzialy hash zwycieskiej kopii, `ownership_leaks=0`.
 
+### RTT i no-op I/O (pomiar orientacyjny)
+
+Przed pomiarem ponownie potwierdzono QNAP Primary, PostgreSQL 16.15,
+`pg_config --configure --with-blocksize=32`, runtime `block_size=32768`
+i schemat 39. Status FOD 3.4.537 nadal zwracal `Latest schema shape: yes`
+i `FOD ready: yes`. RTT to 100 zapytan `SELECT 1` na jednym utrzymywanym
+polaczeniu po 5 probach rozgrzewkowych: mediana `1.448 ms`, p95
+`5.054 ms`, srednia `4.407 ms`.
+
+FOD 3.4.537 wykonal po jednym no-op zapisie na kazdy rozmiar od 1 do 16
+blokow po 32 KiB. Kazdy punkt utworzyl osobny plik, zapisal ten sam payload
+co seed i zweryfikowal odczyt w tym samym mountcie. `write_ms` mierzy
+`write_all` wraz z zamknieciem uchwytu; `read_ms` mierzy walidujace
+`fs::read` na rozgrzanym mountcie. To pojedyncze probki diagnostyczne,
+nie baseline wydajnosci ani zimny odczyt z PostgreSQL.
+
+| Bloki | Bajty | Zapis ms | Odczyt ms |
+| ---: | ---: | ---: | ---: |
+| 1 | 32768 | 195.327 | 537.846 |
+| 2 | 65536 | 102.588 | 257.939 |
+| 3 | 98304 | 80.344 | 262.753 |
+| 4 | 131072 | 118.277 | 233.639 |
+| 5 | 163840 | 109.954 | 245.683 |
+| 6 | 196608 | 104.571 | 248.168 |
+| 7 | 229376 | 121.058 | 310.482 |
+| 8 | 262144 | 200.056 | 310.195 |
+| 9 | 294912 | 140.560 | 331.976 |
+| 10 | 327680 | 157.896 | 250.641 |
+| 11 | 360448 | 172.683 | 220.387 |
+| 12 | 393216 | 142.829 | 175.391 |
+| 13 | 425984 | 137.243 | 163.325 |
+| 14 | 458752 | 400.586 | 441.230 |
+| 15 | 491520 | 443.746 | 682.984 |
+| 16 | 524288 | 378.904 | 353.054 |
+
 To byly dwa niezalezne procesy FUSE na jednym hoście klienckim `lt7300`,
-nie test dwoch hostow Linux. Nie sprawdzono osobnego RTT ani macierzy
-obciazenia `no-op` 1–16 blokow; pozostaja poza tym przebiegiem. Testowano
+nie test dwoch hostow Linux. Dla I/O nie wykonano macierzy powtorzen;
+wynikow nie uzywac do porownywania wersji. Testowano
 wylacznie `fod_pr30_qnap_test`; produkcyjna `foddbname` nie byla celem
 polaczen ani testow.
