@@ -159,6 +159,23 @@ reports a different version from the selected library. Build containers may
 select their pinned libfuse through an explicit `PKG_CONFIG_PATH`; record and
 verify that selected version rather than relying on the host's default.
 
+## GitHub `main` protection and CI policy
+
+Protect the `main` branch against deletion and force pushes. This is the
+default, minimal GitHub repository protection policy for FOD. Do not add
+mandatory pull-request reviews, mandatory pull-request-only changes, or required
+status checks unless the user explicitly requests them.
+
+GitHub Actions CI is optional, not required for working on or merging FOD.
+Do not create, enable, or make CI workflows mandatory without explicit user
+approval. Verification is normally performed through deliberately selected
+local tests on the target Linux/FUSE/PostgreSQL environment; document the actual
+test results and limitations before merging. This policy does not prohibit
+using optional CI if the user later chooses to adopt it.
+
+Branch protection is a separate GitHub repository setting: recording this rule
+in `AGENTS.md` does not, by itself, enable protection on GitHub.
+
 ## Commit review
 
 After every completed, verified logical change, create a commit on `main`
